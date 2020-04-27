@@ -1,5 +1,5 @@
 <h2>HenHouse</h2>
-<h2>HenHouse solar powered automation system with LoRaWan connectivity, based on ATmega32u4</h2>
+<h3>solar powered smart and automated hen house system with LoRaWan connectivity, based on ATmega32u4</h3>
 
 <li>UP/DOWN interface buttons to control Guillotine door opening/closing</li>
 <li>Door has endswitches to stop opening/closing as well as a timeout if endswitches were not reached in time</li> 
