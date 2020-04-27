@@ -49,7 +49,7 @@ function Decoder(bytes, port) {
     var S2Int = (bytes[4] << 8) | bytes[5];
     var S3Int = (bytes[6] << 8) | bytes[7];  
     var S4Int = (bytes[8] << 8) | bytes[9]; 
-    var BattInt = (bytes[10] << 8) | bytes[11];
+    var LumInt = (bytes[10] << 8) | bytes[11];
     var DigInt = (bytes[12] << 8) | bytes[13];
          
     // Decode int to float
@@ -58,7 +58,7 @@ function Decoder(bytes, port) {
     decoded.S2temp = S2Int / 100;
     decoded.S3temp = S3Int / 100;
     decoded.S4temp = S4Int / 100;
-    decoded.batt = BattInt / 100;
+    decoded.lum = LumInt / 100;
 
     // Decode digital inputs
     decoded.ButtonDown = (DigInt & 1) === 0?0:1;
@@ -120,6 +120,8 @@ int DoorActualPos = 100;
 //Door movements
 #define DoorOPEN     1
 #define DoorCLOSE    0
+#define InContact  0  //endswitches state when in limit position
+
 unsigned long DoorTimeConstant = 30000L; //30 sec
 
 String _endl = "\n";
@@ -133,12 +135,17 @@ char temp[50];
 #define SwDOWN  9  //endswitch DOWN
 #define INTERLCK  9  //Main Door Interlock
 
+//Motor controller pins
+#define AIN1 A3
+#define AIN2 A4
+#define STBY A5
+
 //Up and Down push buttons used to open/close Hen's guillotine door
 #define PUSH_BUTTON_UP    0 //INT2
 #define PUSH_BUTTON_DOWN  1 //INT3
 
 //Analog input pin to read the Battery level
-#define VBATPIN A0
+#define VLUMPIN A0
 
 // Setup a oneWire instance to communicate with any OneWire devices
 OneWire oneWire_A(ONE_WIRE_BUS_A);
@@ -179,7 +186,7 @@ uint8_t DevAddr[4] = { 0x26, 0x01, 0x15, 0x94 };
 // Bytes 12-13: digital inputs reading
 unsigned char loraData[14];
 uint8_t DigInputs = 0;
-int16_t batteryInt = 0;
+int16_t lumInt = 0;
 int16_t tmInt, S1Int, S2Int, S3Int, S4Int;
 
 // Pinout for Adafruit Feather 32u4 LoRa
@@ -281,6 +288,15 @@ void setup()
   pinMode(SwUP, INPUT_PULLUP);
   pinMode(SwDOWN, INPUT_PULLUP);
   pinMode(INTERLCK, INPUT_PULLUP);
+
+  //Digital outputs
+  pinMode(AIN1, OUTPUT);
+  pinMode(AIN2, OUTPUT);
+  pinMode(STBY, OUTPUT);
+
+  digitalWrite(STBY, LOW);
+  digitalWrite(AIN1, LOW);
+  digitalWrite(AIN2, LOW);
     
   // Initialize push buttons as inputs
   pinMode(PUSH_BUTTON_UP, INPUT_PULLUP);
@@ -413,13 +429,15 @@ void LoraPublish()
       float S4 = sensors_A.getTempC(DS18b20_4); 
       
       //Read battery level
-      float measuredvbat = analogRead(VBATPIN);
-      measuredvbat *= 2;    // we divided by 2 with the resistors bridge, so multiply back
-      measuredvbat *= 3.3;  // Multiply by 3.3V, our reference voltage
-      measuredvbat /= 1024; // convert to voltage
+      float measuredvlum = analogRead(VLUMPIN);
+      //measuredvlum *= 2;    // we divided by 2 with the resistors bridge, so multiply back
+      //measuredvlum *= 3.3;  // Multiply by 3.3V, our reference voltage
+      //measuredvlum /= 1024; // convert to voltage
+      measuredvlum *= 100.0;  // 100%
+      measuredvlum /= 1024; // convert to voltage
       
       // encode float as int
-      batteryInt = round(measuredvbat * 100);
+      lumInt = round(measuredvlum * 100);
       tmInt = round(tm * 100);
       S1Int = round(S1 * 100);
       S2Int = round(S2 * 100);
@@ -430,7 +448,7 @@ void LoraPublish()
       writeBitmap(false, digitalRead(INTERLCK), digitalRead(SwDOWN), digitalRead(SwUP), digitalRead(STAT2), digitalRead(STAT1), ButtonUPPressed, ButtonDWNPressed);
        
       Serial.print("VBat: " ); 
-      Serial.print(measuredvbat);
+      Serial.print(measuredvlum);
       Serial.print("V\t");
       Serial.print("Main Temp: ");
       Serial.print(tm);
@@ -466,8 +484,8 @@ void LoraPublish()
       loraData[8] = highByte(S4Int);
       loraData[9] = lowByte(S4Int);
       
-      loraData[10] = highByte(batteryInt);
-      loraData[11] = lowByte(batteryInt);
+      loraData[10] = highByte(lumInt);
+      loraData[11] = lowByte(lumInt);
     
       loraData[12] = highByte(0);
       loraData[13] = lowByte(DigInputs);
@@ -486,34 +504,32 @@ void LoraPublish()
 //open or close Door
 void moveDoor(bool _direction)
 {
-  if(_direction)
+  if(_direction)//open
   {
-    if(digitalRead(PIN_R1))
-    {
-      digitalWrite(PIN_R1, LOW); 
-      delay(300);
-      Serial<<F("Delay in moveDoor +")<<_endl;
-    }
-     digitalWrite(PIN_R0, HIGH);
-     Serial<<F("moveDoor +")<<_endl;
-  }
+      digitalWrite(AIN1, LOW);
+      digitalWrite(AIN2, HIGH);
+      if((digitalRead(SwDOWN) == InContact) || ((digitalRead(SwDOWN) != InContact) && ((digitalRead(SwUP) != InContact))))//open door if bottom magnet is in contact or both are not
+        digitalWrite(STBY, HIGH);
+      else
+        digitalWrite(STBY, LOW);
+        
+   }
   else
   {
-    if(digitalRead(PIN_R0))
-    {
-      digitalWrite(PIN_R0, LOW); 
-      delay(300);
-      Serial<<F("Delay in moveDoor -")<<_endl;
-    }
-     digitalWrite(PIN_R1, HIGH);
-     Serial<<F("moveDoor -")<<_endl;
+      digitalWrite(AIN2, LOW);
+      digitalWrite(AIN1, HIGH);
+       if((digitalRead(SwUP) == InContact) || ((digitalRead(SwDOWN) != InContact) && ((digitalRead(SwUP) != InContact))))//close door if top magnet is in contact or both are not
+        digitalWrite(STBY, HIGH);
+      else
+        digitalWrite(STBY, LOW);
   }
 }
 
 void stopDoor()
 {
-  digitalWrite(PIN_R0, LOW); 
-  digitalWrite(PIN_R1, LOW); 
+  digitalWrite(STBY, LOW);
+  digitalWrite(AIN1, LOW);
+  digitalWrite(AIN2, LOW); 
 }
 ////////////////////////Door state machine///////////////////////////////////////
 
