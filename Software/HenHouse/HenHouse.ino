@@ -2,10 +2,9 @@
 HenHouse solar-powered intelligent controller:
 UP/DOWN interface buttons to control Guillotine door opening/closing
 Door has endswitches to stop opening/closing as well as a timeout if endswitches were not reached in time 
-Measures temperature in 4 egg-slots + in main area
+Measures temperature in 4 egg-slots + an average of the 4 sensors
 Measures battery voltage as well as charging state (charging, done)
-Reports all measured inputs over LoRaWan every minute or when an interface button is activated
-Goes to DeepSleep until UP/DOWN buttons are pressed + wakes up every minute to broadcast data over LoRaWan measured inputs
+Goes to DeepSleep until UP/DOWN buttons are pressed or until watchdog wakes it up (every 5 minutes) to broadcast measured inputs data over LoRaWan 
 
 Plug the Adafruit solar charger STAT1 digital output (Battery charging status) to digital input pin 2 of Feather board
 Plug the Adafruit solar charger STAT2 digital output (Battery done charging status) to digital input pin 3 of Feather board
@@ -25,14 +24,7 @@ https://github.com/adafruit/TinyLoRa/ (rev 1.0.4)
 */
 /*
  TODO: 
- read digital inputs from motor up/down endswitches and broadcast them
- Add state machine for when door is opening/closing
- Add reading/broadcasting of multiple temp probes
- USe port 3 for TTN decoding
  Add timeout on door opening closing in case endswitches fail. Report error over MQTT if timeout reached
- Add downward commands to open/close doors
- Add reading luminosity and open/close door accordingly. Add hysteresis
- Check what happens when pressing buttons while system already awake (deboucne class event?)
  */
 
 /*
@@ -70,6 +62,21 @@ function Decoder(bytes, port) {
     decoded.DoorIntck = (DigInt & 7) === 0?1:0;
     return decoded;
   }
+  else
+  if(port == 4)
+  {
+    // Decode bytes to int
+    var DoorWPos = (bytes[0] << 8) | bytes[1];
+    var DoorAPos = (bytes[2] << 8) | bytes[3];
+ 
+    // Decode digital inputs
+    decoded.ButtonDown = (DigInt & 1) === 0?0:1;
+    decoded.ButtonUp = (DigInt & 2) === 0?0:1;
+    decoded.DoorSwUp = (DigInt & 5) === 0?1:0;
+    decoded.DoorSwDn = (DigInt & 6) === 0?1:0;
+    decoded.DoorIntck = (DigInt & 7) === 0?1:0;
+    return decoded;
+  }
 }*/
 /************************** Configuration ***********************************/
 #include <TinyLoRa.h>
@@ -96,6 +103,7 @@ String Firmw = "0.0.1";
 volatile bool watchdogActivated = false;
 volatile bool ButtonUPPressed = false;
 volatile bool ButtonDWNPressed = false;
+volatile float measuredvlum = 25.0;
 
 int sleepIterations = 0;
 const int debounceTime = 20;  // debounce in milliseconds
@@ -154,7 +162,7 @@ OneWire oneWire_A(ONE_WIRE_BUS_A);
 DallasTemperature sensors_A(&oneWire_A);
 
 //MAC Address of DS18b20 temperature sensor (!unique to every sensor!)
-DeviceAddress DS18b20_0 = { 0x28, 0xD4, 0x68, 0x00, 0x0C, 0x00, 0x00, 0x92 };//Main temp
+//DeviceAddress DS18b20_0 = { 0x28, 0xD4, 0x68, 0x00, 0x0C, 0x00, 0x00, 0x92 };//Main temp
 DeviceAddress DS18b20_4 = { 0x28, 0x9C, 0xD0, 0x00, 0x0C, 0x00, 0x00, 0x37 };//Slot1 temp
 DeviceAddress DS18b20_3 = { 0x28, 0xB1, 0x7D, 0x00, 0x0C, 0x00, 0x00, 0x14 };//Slot2 temp
 DeviceAddress DS18b20_1 = { 0x28, 0xCB, 0x32, 0xFF, 0x0B, 0x00, 0x00, 0x54 };//Slot3 temp
@@ -257,20 +265,6 @@ void writeBitmap(bool a, bool b, bool c, bool d, bool e, bool f, bool g, bool h)
     DigInputs |= (h & 1) << 0;
 }
 
-void deBounceUP ()
-{
-  unsigned long now = millis ();
-  do
-  {
-    // on bounce, reset time-out
-    if (digitalRead (PUSH_BUTTON_UP) == LOW)
-      now = millis ();
-  } 
-  while (digitalRead (PUSH_BUTTON_UP) == LOW ||
-    (millis () - now) <= debounceTime);
-
-}  // end of deBounce
-
 void setup()
 {
   delay(2000);
@@ -306,13 +300,16 @@ void setup()
   sensors_A.begin();
        
   // set the resolution
-  sensors_A.setResolution(DS18b20_0, TEMPERATURE_RESOLUTION);
-
+  sensors_A.setResolution(DS18b20_1, TEMPERATURE_RESOLUTION);
+  sensors_A.setResolution(DS18b20_2, TEMPERATURE_RESOLUTION);  
+  sensors_A.setResolution(DS18b20_3, TEMPERATURE_RESOLUTION);  
+  sensors_A.setResolution(DS18b20_4, TEMPERATURE_RESOLUTION);
+  
   //Synchronous mode
   sensors_A.setWaitForConversion(true);
 
   //motorized door state machine init
-//  Door.next(Door_wait);
+  Door.next(Door_wait);
 
   // Allow wake up pin to trigger interrupt on low.
   EIFR = 3;      // cancel any existing falling interrupt (interrupt 2)
@@ -346,7 +343,7 @@ void setup()
   // Enable interrupts again.
   interrupts();
   
-    // Initialize LoRa
+  // Initialize LoRa
   // Make sure Region #define is correct in TinyLora.h file
   Serial.print("Starting LoRa...");
   // define multi-channel sending
@@ -364,18 +361,15 @@ void setup()
 
 void loop()
 {
-  //Door.run();
+   //update Door state engine
+   Door.run();
   
-  // Don't do anything unless the watchdog timer interrupt has fired.
+   //if Button UP interrupt has fired
    if(ButtonUPPressed)
     {
-      // Do something here
-      // Example: Read sensor, data logging, data transmission.
-      // blink LED to indicate packet sent
-      //deBounce ();
-      
-      LoraPublish();
-      
+      //Door setpoint at 100% (open)
+      DoorWantedPos = 100.0;
+    
       //Serial.println(counter);
       ButtonUPPressed = 0;
       
@@ -383,14 +377,12 @@ void loop()
       EIFR = 3;      // cancel any existing falling interrupt (interrupt 2)
       attachInterrupt(digitalPinToInterrupt(PUSH_BUTTON_UP), ButtonUPWake, LOW);  
     }
+
+    //if Button DOWN interrupt has fired.
     if(ButtonDWNPressed)
     {
-      // Do something here
-      // Example: Read sensor, data logging, data transmission.
-      // blink LED to indicate packet sent
-      //deBounce ();
-      
-      LoraPublish();
+      //Door setpoint at 0% (closed)
+      DoorWantedPos = 0.0;
            
       //Serial.println(counter);
       ButtonDWNPressed = 0;
@@ -399,42 +391,53 @@ void loop()
       EIFR = 4;      // cancel any existing falling interrupt (interrupt 3)
       attachInterrupt(digitalPinToInterrupt(PUSH_BUTTON_DOWN), ButtonDWNWake, LOW);  
     }
-      
-  if(watchdogActivated)
-  {
-     watchdogActivated = false;
-    // Increase the count of sleep iterations and take a sensor
-    // reading once the max number of iterations has been hit.
-    sleepIterations += 1;
-    if (sleepIterations >= MAX_SLEEP_ITERATIONS) 
+
+    //if watchdog interrupt has fired  
+    if(watchdogActivated)
     {
-      // Reset the number of sleep iterations.
-      sleepIterations = 0;
+       watchdogActivated = false;
+      // Increase the count of sleep iterations and take a sensor
+      // reading once the max number of iterations has been hit.
+      sleepIterations += 1;
+      if (sleepIterations >= MAX_SLEEP_ITERATIONS) 
+      {
+        // Reset the number of sleep iterations.
+        sleepIterations = 0;
 
-      LoraPublish();
-    }
-  }
+        //send sensors data
+        LoraPublish(3);
+      }
+     }
 
-    // Go to sleep!
-    sleep();
+     //Open door at sunrise and close it at sunset, based on a 25% ambient luminosity threshold
+     if((DoorActualPos == 0) && (measuredvlum > 25.0))//Door is closed and luminosity > 25% ->open door
+      DoorWantedPos = 100.0;
+     else
+     if((DoorActualPos == 100) && (measuredvlum < 25.0))//Door is open and luminosity < 25% ->close door
+      DoorWantedPos = 0.0;
+     
+
+    // Go to sleep if door is at desired position and nothing else to do
+    if((int)DoorWantedPos == DoorActualPos)
+      sleep();
 }
 
-void LoraPublish()
+void LoraPublish(unsigned char port)
 {
+  //port 3 is used to send sensors data at regular intervals
+  if(port ==3)
+  {
       sensors_A.requestTemperatures();
-      float tm = sensors_A.getTempC(DS18b20_0);
       float S1 = sensors_A.getTempC(DS18b20_1);
       float S2 = sensors_A.getTempC(DS18b20_2);
       float S3 = sensors_A.getTempC(DS18b20_3);
       float S4 = sensors_A.getTempC(DS18b20_4); 
-      
-      //Read battery level
-      float measuredvlum = analogRead(VLUMPIN);
-      //measuredvlum *= 2;    // we divided by 2 with the resistors bridge, so multiply back
-      //measuredvlum *= 3.3;  // Multiply by 3.3V, our reference voltage
-      //measuredvlum /= 1024; // convert to voltage
+      float tm = (S1+S2+S3+S4)/4.0;
+       
+      //Read luminosity level
+      measuredvlum = analogRead(VLUMPIN);
       measuredvlum *= 100.0;  // 100%
-      measuredvlum /= 1024; // convert to voltage
+      measuredvlum /= 1024; // convert to %
       
       // encode float as int
       lumInt = round(measuredvlum * 100);
@@ -444,7 +447,7 @@ void LoraPublish()
       S3Int = round(S3 * 100);
       S4Int = round(S4 * 100);
               
-      //Read the Digital inputs states and record them into a Byte to be sent in the message payload (not used in this sketch) 
+      //Read the Digital inputs states and record them into a Byte to be sent in the message payload
       writeBitmap(false, digitalRead(INTERLCK), digitalRead(SwDOWN), digitalRead(SwUP), digitalRead(STAT2), digitalRead(STAT1), ButtonUPPressed, ButtonDWNPressed);
        
       Serial.print("VBat: " ); 
@@ -489,9 +492,38 @@ void LoraPublish()
     
       loraData[12] = highByte(0);
       loraData[13] = lowByte(DigInputs);
+  }
+  else
+  if(port == 4)//port 4 is used to send door opening/closing progress info only when moving
+  {
+      //Read the Digital inputs states and record them into a Byte to be sent in the message payload
+      writeBitmap(false, digitalRead(INTERLCK), digitalRead(SwDOWN), digitalRead(SwUP), digitalRead(STAT2), digitalRead(STAT1), ButtonUPPressed, ButtonDWNPressed);
+       
+      Serial.print("Door wanted pos: " ); 
+      Serial.print(DoorWantedPos);
+      Serial.print("%%");
+      Serial.print(" - Door actual pos: ");
+      Serial.print(DoorActualPos);
+      Serial.print("%%\t");
+      Serial.print("DigInputs: ");
+      Serial.println(DigInputs);
+
+      //convert float to int
+      int iDoorWantedPos = round(DoorWantedPos);
+      
+      // encode int as bytes
+      loraData[0] = highByte(iDoorWantedPos);
+      loraData[1] = lowByte(iDoorWantedPos);
+      
+      loraData[2] = highByte(DoorActualPos);
+      loraData[3] = lowByte(DoorActualPos);
+    
+      loraData[4] = highByte(0);
+      loraData[5] = lowByte(DigInputs);    
+  }
     
       Serial.println("Sending LoRa Data...");
-      lora.sendData(loraData, sizeof(loraData), 3, lora.frameCounter);
+      lora.sendData(loraData, sizeof(loraData), port, lora.frameCounter);
       Serial.print("Frame Counter: ");Serial.println(lora.frameCounter);
       lora.frameCounter++;
     
@@ -508,7 +540,7 @@ void moveDoor(bool _direction)
   {
       digitalWrite(AIN1, LOW);
       digitalWrite(AIN2, HIGH);
-      if((digitalRead(SwDOWN) == InContact) || ((digitalRead(SwDOWN) != InContact) && ((digitalRead(SwUP) != InContact))))//open door if bottom magnet is in contact or both are not
+      if((digitalRead(SwUP) != InContact))//open door if top magnet is not in contact
         digitalWrite(STBY, HIGH);
       else
         digitalWrite(STBY, LOW);
@@ -518,7 +550,7 @@ void moveDoor(bool _direction)
   {
       digitalWrite(AIN2, LOW);
       digitalWrite(AIN1, HIGH);
-       if((digitalRead(SwUP) == InContact) || ((digitalRead(SwDOWN) != InContact) && ((digitalRead(SwUP) != InContact))))//close door if top magnet is in contact or both are not
+       if((digitalRead(SwDOWN) != InContact))//close door if bottom magnet is not in contact
         digitalWrite(STBY, HIGH);
       else
         digitalWrite(STBY, LOW);
@@ -543,10 +575,11 @@ void Door_wait()
   
     Serial<<F("round(DoorActualPos): ")<<round(DoorActualPos)<<F(" ")<<DoorWantedPos<<_endl;
       
-    //if(DoorActualPos==DoorWantedPos) Door.next(Door_halt);stopMixValve();
     if(DoorActualPos==DoorWantedPos) stopDoor();
     if(DoorActualPos<DoorWantedPos) Door.next(Door_moveOpen);
     if(DoorActualPos>DoorWantedPos) Door.next(Door_moveClose);
+    if(digitalRead(SwUP) == InContact) DoorActualPos = 100.0;
+    if(digitalRead(SwDOWN) == InContact) DoorActualPos = 0.0;
 }
 
 void Door_moveOpen()
@@ -554,14 +587,11 @@ void Door_moveOpen()
   if(Door.isFirstRun())
     Serial<<F("Door_moveOpen ")<<DoorActualPos*1<<F(" ")<<DoorWantedPos<<_endl;
     moveDoor(DoorOPEN);
-   // if(Door.elapsed(C[1][0]*10)) //C1.0 is in s so we need to *1000 to get value in ms.
     if(Door.elapsed(DoorTimeConstant/10)) //C1.0 is in s so we need to *1000 to get value in ms.
     {                           //then we /100 to get ms time needed to move 1% : so we *10
         DoorActualPos+=10;
-        temp_str = String(DoorActualPos); //converting DoorActualPos (the variable above) to a String 
-        temp_str.toCharArray(temp, temp_str.length() + 1); //packaging up the data to publish to mqtt whoa...
-        //if(MQTTClient.publish(WaterVanneEauTopicPos,temp,true,LWMQTT_QOS1))
-        //Serial<<F("published: Charmoisy/VanneEau/pos: ")<<round(DoorActualPos)<<F(" ")<<DoorWantedPos<<_endl;
+        LoraPublish(4);
+        Serial<<F("Door_moveOpen ")<<DoorActualPos*1<<F(" - ")<<DoorWantedPos<<_endl; 
         Door.next(Door_wait);
     }
 }
@@ -572,13 +602,11 @@ void Door_moveClose()
     Serial<<F("Door_moveClose ")<<DoorActualPos*1<<F(" ")<<DoorWantedPos<<_endl; 
     moveDoor(DoorCLOSE);
     //if(Door.elapsed(C[1][0]*10)) //C1.0 is in s so we need to *1000 to get value in ms.
-    if(Door.elapsed(DoorTimeConstant/10)) //C1.0 is in s so we need to *1000 to get value in ms.
-    {                           //then we /100 to get ms time needed to move 1% : so we *10
+    if(Door.elapsed(DoorTimeConstant/10))//door has been moving for an additional 10% increment
+    {                           
         DoorActualPos-=10;
-        temp_str = String(DoorActualPos); //converting DoorActualPos (the variable above) to a String 
-        temp_str.toCharArray(temp, temp_str.length() + 1); //packaging up the data to publish to mqtt whoa...
-        //if(MQTTClient.publish(WaterVanneEauTopicPos,temp,true,LWMQTT_QOS1))
-        //Serial<<F("published: Charmoisy/VanneEau/pos: ")<<round(DoorActualPos)<<F(" ")<<DoorWantedPos<<_endl;
+        LoraPublish(4);
+        Serial<<F("Door_moveClose ")<<DoorActualPos*1<<F(" - ")<<DoorWantedPos<<_endl;
         Door.next(Door_wait);
     }
 }
