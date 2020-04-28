@@ -10,9 +10,9 @@
 <li>Runs on a 3.7V 4400mAh Lithium Ion Battery Pack and a 6V, 1W solar panel</li>
 <li>Reports all measured inputs over LoRaWan every minute or when an interface button is activated</li>
 <li>Goes to DeepSleep until UP/DOWN buttons are pressed + wakes up every minute to broadcast data over LoRaWan measured inputs</li>
-<li>broadcasts every 5 minutes the systems’ metrics (temperatures, ambient light level, door position, battery level and charging status), received by home automation system in JSON format via MQTT broker</li><br />
+<li>broadcasts every 5 minutes the systems’ metrics (temperatures, ambient light level, door position, battery level and charging status), received by home automation system in JSON format via MQTT broker</li><br /><br />
 
-In order to broadcast data to the TTN network, you need to register an account as well as the Feather board. <a title="https://learn.adafruit.com/the-things-network-for-feather/using-a-feather-32u4" href="https://learn.adafruit.com/the-things-network-for-feather/using-a-feather-32u4">Detailed instructions here</a>.<br />
+In order to broadcast data to the TTN network, you need to register an account as well as the Feather board. <a title="https://learn.adafruit.com/the-things-network-for-feather/using-a-feather-32u4" href="https://learn.adafruit.com/the-things-network-for-feather/using-a-feather-32u4">Detailed instructions here</a>.<br /><br />
 
 
 <h4>Hardware</h4>
