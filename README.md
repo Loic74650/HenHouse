@@ -1,5 +1,7 @@
 <h2>HenHouse</h2>
-<h3>solar powered smart and automated hen house system with LoRaWan connectivity (ATmega32u4)</h3>
+<h3>solar powered smart and automated hen house system with LoRaWan connectivity (ATmega32u4)</h3><br />
+
+<p align="center"> <img src="/Images/P_1.jpg" width="702" title="Schematics"> </p> <br /><br />
 
 <h4>Key features</h4>
 <li>Runs on an Adafruit Feather 32u4 board (ATmega32u4) equiped with a LoRa Radio Module</li>
