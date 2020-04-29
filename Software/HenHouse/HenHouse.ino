@@ -6,23 +6,12 @@ Measures temperature in 4 egg-slots + an average of the 4 sensors
 Measures battery voltage as well as charging state (charging, done)
 Goes to DeepSleep until UP/DOWN buttons are pressed or until watchdog wakes it up (every 5 minutes) to broadcast measured inputs data over LoRaWan 
 
-Plug the Adafruit solar charger STAT1 digital output (Battery charging status) to digital input pin 2 of Feather board
-Plug the Adafruit solar charger STAT2 digital output (Battery done charging status) to digital input pin 3 of Feather board
-Plug guillotine door endswitch UP to digital input pin 5 and GND of Feather board
-Plug guillotine door endswitch DOWN to digital input pin 6 and GND of Feather board
-Plug Large side door interlock switch to digital input pin 9 and GND of Feather board
-Plug door UP button between pin 0 and GND
-Plug door DOWN button between pin 1 and GND
-
-
 ***Dependencies and respective revisions used to compile this project***
 https://github.com/PaulStoffregen/OneWire (rev 2.3.4)
 https://github.com/milesburton/Arduino-Temperature-Control-Library (rev 3.7.2)
 https://github.com/bricofoy/yasm (rev 0.9.2)
 https://github.com/adafruit/TinyLoRa/ (rev 1.0.4)
 
-*/
-/*
  TODO: 
  Add timeout on door opening closing in case endswitches fail. Report error over MQTT if timeout reached
  */
@@ -42,7 +31,8 @@ function Decoder(bytes, port) {
     var S3Int = (bytes[6] << 8) | bytes[7];  
     var S4Int = (bytes[8] << 8) | bytes[9]; 
     var LumInt = (bytes[10] << 8) | bytes[11];
-    var DigInt = (bytes[12] << 8) | bytes[13];
+    var BattInt = (bytes[12] << 8) | bytes[13];
+    var DigInt = (bytes[14] << 8) | bytes[15];
          
     // Decode int to float
     decoded.Mtemp = tmInt / 100;
@@ -51,6 +41,7 @@ function Decoder(bytes, port) {
     decoded.S3temp = S3Int / 100;
     decoded.S4temp = S4Int / 100;
     decoded.lum = LumInt / 100;
+    decoded.bat = BattInt / 100;
 
     // Decode digital inputs
     decoded.ButtonDown = (DigInt & 1) === 0?0:1;
@@ -105,21 +96,17 @@ volatile bool ButtonUPPressed = false;
 volatile bool ButtonDWNPressed = false;
 volatile float measuredvlum = 25.0;
 
-int sleepIterations = 0;
-const int debounceTime = 20;  // debounce in milliseconds
+volatile int sleepIterations = 0;
 
 // Data wire is connected to input digital pin A4 of the Adafruit Feather 32u4 LoRa
 #define ONE_WIRE_BUS_A A4
 
-// Analog port to measure Luminosity
-#define LumPort A0
-
 //Motorized door state machine
-YASM Door;
+volatile YASM Door;
 
 //Door position
-double DoorWantedPos = 100.0;
-int DoorActualPos = 100;
+volatile double DoorWantedPos = 100.0;
+volatile int DoorActualPos = 0;
 
 //relay pins to actuate DC motor CW or CCW
 #define PIN_R0 0 
@@ -130,7 +117,9 @@ int DoorActualPos = 100;
 #define DoorCLOSE    0
 #define InContact  0  //endswitches state when in limit position
 
-unsigned long DoorTimeConstant = 30000L; //30 sec
+const unsigned long DoorTimeConstant = 30000L; //30 sec
+unsigned long DoorCycleStart = 0L;
+unsigned long DoorCycleEnd = 0L;
 
 String _endl = "\n";
 String temp_str;
@@ -145,7 +134,7 @@ char temp[50];
 
 //Motor controller pins
 #define AIN1 A3
-#define AIN2 A4
+#define AIN2 A2
 #define STBY A5
 
 //Up and Down push buttons used to open/close Hen's guillotine door
@@ -153,6 +142,9 @@ char temp[50];
 #define PUSH_BUTTON_DOWN  1 //INT3
 
 //Analog input pin to read the Battery level
+#define VBATTPIN A1
+
+//Analog input pin to read the ambient luminosity level
 #define VLUMPIN A0
 
 // Setup a oneWire instance to communicate with any OneWire devices
@@ -185,16 +177,18 @@ uint8_t AppSkey[16] = { 0x88, 0xB5, 0x4C, 0x7B, 0xD2, 0x12, 0x8B, 0xE7, 0x6A, 0x
 uint8_t DevAddr[4] = { 0x26, 0x01, 0x15, 0x94 };
 
 // Data Packet to Send to TTN
-// Bytes 0-1: Main temperature over two bytes
+// Bytes 0-1: Average temperature over two bytes
 // Bytes 2-3: Slot1 temperature over two bytes
 // Bytes 4-5: Slot2 temperature over two bytes
 // Bytes 6-7: Slot3 temperature over two bytes
 // Bytes 8-9: Slot4 temperature over two bytes
-// Bytes 10-11: Battery voltage over two bytes
-// Bytes 12-13: digital inputs reading
-unsigned char loraData[14];
+// Bytes 10-11: Luminosity voltage over two bytes
+// Bytes 12-13: Battery voltage over two bytes
+// Bytes 14-15: digital inputs reading
+unsigned char loraData[16];
 uint8_t DigInputs = 0;
 int16_t lumInt = 0;
+int16_t battInt = 0;
 int16_t tmInt, S1Int, S2Int, S3Int, S4Int;
 
 // Pinout for Adafruit Feather 32u4 LoRa
@@ -271,7 +265,7 @@ void setup()
   Serial.begin(9600);
   
   //uncomment this in debug mode
-  //while (! Serial);
+  while (! Serial);
  
   // Initialize pin LED_BUILTIN as an output
   pinMode(LED_BUILTIN, OUTPUT);
@@ -361,9 +355,6 @@ void setup()
 
 void loop()
 {
-   //update Door state engine
-   Door.run();
-  
    //if Button UP interrupt has fired
    if(ButtonUPPressed)
     {
@@ -372,6 +363,12 @@ void loop()
     
       //Serial.println(counter);
       ButtonUPPressed = 0;
+      ButtonDWNPressed = 0;
+
+       // blink LED to indicate packet sent
+      digitalWrite(LED_BUILTIN, HIGH);
+      delay(100);
+      digitalWrite(LED_BUILTIN, LOW); 
       
       // Allow wake up pin to trigger interrupt on low.
       EIFR = 3;      // cancel any existing falling interrupt (interrupt 2)
@@ -386,13 +383,22 @@ void loop()
            
       //Serial.println(counter);
       ButtonDWNPressed = 0;
+      ButtonUPPressed = 0;
+      
+      // blink LED to indicate packet sent
+      digitalWrite(LED_BUILTIN, HIGH);
+      delay(100);
+      digitalWrite(LED_BUILTIN, LOW); 
       
       // Allow wake up pin to trigger interrupt on low.
       EIFR = 4;      // cancel any existing falling interrupt (interrupt 3)
       attachInterrupt(digitalPinToInterrupt(PUSH_BUTTON_DOWN), ButtonDWNWake, LOW);  
     }
 
-    //if watchdog interrupt has fired  
+    //update Door state engine
+    Door.run();
+  
+   //if watchdog interrupt has fired  
     if(watchdogActivated)
     {
        watchdogActivated = false;
@@ -418,8 +424,8 @@ void loop()
      
 
     // Go to sleep if door is at desired position and nothing else to do
-    if((int)DoorWantedPos == DoorActualPos)
-      sleep();
+    //if((int)DoorWantedPos == DoorActualPos)
+    //  sleep();
 }
 
 void LoraPublish(unsigned char port)
@@ -438,9 +444,15 @@ void LoraPublish(unsigned char port)
       measuredvlum = analogRead(VLUMPIN);
       measuredvlum *= 100.0;  // 100%
       measuredvlum /= 1024; // convert to %
+
+      //Read battery level
+      float measuredbatt = analogRead(VBATTPIN);
+      measuredbatt *= 6.6;  // 100% = 3.3*2V because of voltage divider
+      measuredbatt /= 1024; // convert to %
       
       // encode float as int
       lumInt = round(measuredvlum * 100);
+      battInt = round(measuredbatt * 100);
       tmInt = round(tm * 100);
       S1Int = round(S1 * 100);
       S2Int = round(S2 * 100);
@@ -451,8 +463,11 @@ void LoraPublish(unsigned char port)
       writeBitmap(false, digitalRead(INTERLCK), digitalRead(SwDOWN), digitalRead(SwUP), digitalRead(STAT2), digitalRead(STAT1), ButtonUPPressed, ButtonDWNPressed);
        
       Serial.print("VBat: " ); 
-      Serial.print(measuredvlum);
+      Serial.print(measuredbatt);
       Serial.print("V\t");
+      Serial.print("Lum: " ); 
+      Serial.print(measuredvlum);
+      Serial.print("%\t");
       Serial.print("Main Temp: ");
       Serial.print(tm);
       Serial.print("°C\t");
@@ -489,9 +504,12 @@ void LoraPublish(unsigned char port)
       
       loraData[10] = highByte(lumInt);
       loraData[11] = lowByte(lumInt);
-    
-      loraData[12] = highByte(0);
-      loraData[13] = lowByte(DigInputs);
+       
+      loraData[12] = highByte(battInt);
+      loraData[13] = lowByte(battInt);
+         
+      loraData[14] = highByte(0);
+      loraData[15] = lowByte(DigInputs);
   }
   else
   if(port == 4)//port 4 is used to send door opening/closing progress info only when moving
@@ -501,10 +519,10 @@ void LoraPublish(unsigned char port)
        
       Serial.print("Door wanted pos: " ); 
       Serial.print(DoorWantedPos);
-      Serial.print("%%");
+      Serial.print("%");
       Serial.print(" - Door actual pos: ");
       Serial.print(DoorActualPos);
-      Serial.print("%%\t");
+      Serial.print("%\t");
       Serial.print("DigInputs: ");
       Serial.println(DigInputs);
 
@@ -572,23 +590,33 @@ void Door_wait()
     DoorWantedPos=round(DoorWantedPos);
     if(DoorWantedPos<0) DoorWantedPos=0;
     if(DoorWantedPos>100) DoorWantedPos=100;
+    if(DoorActualPos<0) DoorActualPos=0;
+    if(DoorActualPos>100) DoorActualPos=100;
   
-    Serial<<F("round(DoorActualPos): ")<<round(DoorActualPos)<<F(" ")<<DoorWantedPos<<_endl;
+    //Serial<<F("round(DoorActualPos): ")<<round(DoorActualPos)<<F(" ")<<DoorWantedPos<<_endl;
       
-    if(DoorActualPos==DoorWantedPos) stopDoor();
-    if(DoorActualPos<DoorWantedPos) Door.next(Door_moveOpen);
-    if(DoorActualPos>DoorWantedPos) Door.next(Door_moveClose);
     if(digitalRead(SwUP) == InContact) DoorActualPos = 100.0;
     if(digitalRead(SwDOWN) == InContact) DoorActualPos = 0.0;
+    if(DoorActualPos==DoorWantedPos)
+    {
+      stopDoor();
+      DoorCycleEnd = millis();
+    }
+    if(DoorActualPos<DoorWantedPos) Door.next(Door_moveOpen);
+    if(DoorActualPos>DoorWantedPos) Door.next(Door_moveClose);
+
 }
 
 void Door_moveOpen()
 {
   if(Door.isFirstRun())
+  {
     Serial<<F("Door_moveOpen ")<<DoorActualPos*1<<F(" ")<<DoorWantedPos<<_endl;
+    DoorCycleStart = millis();
+  }
     moveDoor(DoorOPEN);
-    if(Door.elapsed(DoorTimeConstant/10)) //C1.0 is in s so we need to *1000 to get value in ms.
-    {                           //then we /100 to get ms time needed to move 1% : so we *10
+    if(Door.elapsed(DoorTimeConstant/10))
+    {                           
         DoorActualPos+=10;
         LoraPublish(4);
         Serial<<F("Door_moveOpen ")<<DoorActualPos*1<<F(" - ")<<DoorWantedPos<<_endl; 
@@ -601,8 +629,7 @@ void Door_moveClose()
   if(Door.isFirstRun())
     Serial<<F("Door_moveClose ")<<DoorActualPos*1<<F(" ")<<DoorWantedPos<<_endl; 
     moveDoor(DoorCLOSE);
-    //if(Door.elapsed(C[1][0]*10)) //C1.0 is in s so we need to *1000 to get value in ms.
-    if(Door.elapsed(DoorTimeConstant/10))//door has been moving for an additional 10% increment
+    if(Door.elapsed(DoorTimeConstant/10))
     {                           
         DoorActualPos-=10;
         LoraPublish(4);
