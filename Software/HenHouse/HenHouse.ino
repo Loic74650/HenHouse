@@ -6,6 +6,23 @@ Measures temperature in 4 egg-slots + an average of the 4 sensors
 Measures battery voltage as well as charging state (charging, done)
 Goes to DeepSleep until UP/DOWN buttons are pressed or until watchdog wakes it up (every 5 minutes) to broadcast measured inputs data over LoRaWan 
 
+Visit your thethingsnetwork.org device console
+to create an account, and obtain the session keys below which are unique to every board.
+
+You should then create a file called "arduino_secrets.h", save it in the project folder, and into which you will paste those unique keys in the following form:
+
+-------------------------------------------------------------------------------------------
+// Network Session Key (MSB)
+uint8_t NwkSkey[16] = { 0x4C, 0xD5, 0xA5, 0x70, 0xFE, 0x7B, 0xC5, 0xDE, 0x52, XXXXXXXXXXXXXXXXXXXXXXXXX };
+
+// Application Session Key (MSB)
+uint8_t AppSkey[16] = { 0x88, 0xB5, 0x4C, 0x7B, 0xD2, 0x12, 0x8B, 0xE7, 0x6A, XXXXXXXXXXXXXXXXXXXXXXXXX };
+
+// Device Address (MSB)
+uint8_t DevAddr[4] = { 0x26, XXXXXXXXXXXXXXXXX };
+
+--------------------------------------------------------------------------------------------
+
 ***Dependencies and respective revisions used to compile this project***
 https://github.com/PaulStoffregen/OneWire (rev 2.3.4)
 https://github.com/milesburton/Arduino-Temperature-Control-Library (rev 3.7.2)
@@ -82,6 +99,7 @@ function Decoder(bytes, port) {
 #include <DallasTemperature.h>
 #include <yasm.h>
 #include <Streaming.h>
+#include "arduino_secrets.h" //this file should be placed in same folder as the sketch and contains your TTN session keys, see below for more details
 
 // Firmware revision
 String Firmw = "0.0.1";
@@ -111,15 +129,12 @@ volatile YASM Door;
 volatile double DoorWantedPos = 100.0;
 volatile int DoorActualPos = 0;
 
-//relay pins to actuate DC motor CW or CCW
-#define PIN_R0 0 
-#define PIN_R1 1 
-
 //Door movements
 #define DoorOPEN     1
 #define DoorCLOSE    0
-#define InContact  0  //endswitches state when in limit position
+#define InContact    0  //endswitches state when in limit position
 
+//Time required for the door to open + 20% or so. Serves as timeout in case endswitches don't work
 const unsigned long DoorTimeConstant = 60000L; //30 sec
 unsigned long DoorCycleStart = 0L;
 unsigned long DoorCycleEnd = 0L;
@@ -133,14 +148,14 @@ char temp[50];
 #define STAT2  11  //Battery done charging status
 #define SwUP  10  //endswitch UP
 #define SwDOWN  9  //endswitch DOWN
-#define INTERLCK  9  //Main Door Interlock
+#define INTERLCK  9  //Main Door Interlock (not used yet)
 
 //Motor controller pins
 #define AIN1 A3
 #define AIN2 A2
 #define STBY A5
 
-//Up and Down push buttons used to open/close Hen's guillotine door
+//Up and Down push buttons used to manually force open/close Hen's guillotine door
 #define PUSH_BUTTON_UP    0 //INT2
 #define PUSH_BUTTON_DOWN  1 //INT3
 
@@ -150,34 +165,20 @@ char temp[50];
 //Analog input pin to read the ambient luminosity level
 #define VLUMPIN A0
 
-// Setup a oneWire instance to communicate with any OneWire devices
+// OneWire instance to communicate with the 4 DS18B20 temperature sensors
 OneWire oneWire_A(ONE_WIRE_BUS_A);
 
 // Pass our oneWire reference to Dallas Temperature library instance 
 DallasTemperature sensors_A(&oneWire_A);
 
 //MAC Address of DS18b20 temperature sensor (!unique to every sensor!)
-//DeviceAddress DS18b20_0 = { 0x28, 0xD4, 0x68, 0x00, 0x0C, 0x00, 0x00, 0x92 };//Main temp
 DeviceAddress DS18b20_4 = { 0x28, 0x9C, 0xD0, 0x00, 0x0C, 0x00, 0x00, 0x37 };//Slot1 temp
 DeviceAddress DS18b20_3 = { 0x28, 0xB1, 0x7D, 0x00, 0x0C, 0x00, 0x00, 0x14 };//Slot2 temp
 DeviceAddress DS18b20_1 = { 0x28, 0xCB, 0x32, 0xFF, 0x0B, 0x00, 0x00, 0x54 };//Slot3 temp
 DeviceAddress DS18b20_2 = { 0x28, 0xD4, 0x68, 0x00, 0x0C, 0x00, 0x00, 0x92 };//Slot4 temp
 
-//12bits (0,06°C) temperature sensor resolution
+//12bits (0,06°C) temperature sensors resolution
 #define TEMPERATURE_RESOLUTION 12
-
-// Visit your thethingsnetwork.org device console
-// to create an account, and obtain the session keys below.
-
-
-// Network Session Key (MSB)
-uint8_t NwkSkey[16] = { XXXXXXXXXXXXXXXXXXXXXXXXXXXX };
-
-// Application Session Key (MSB)
-uint8_t AppSkey[16] = { XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX };
-
-// Device Address (MSB)
-uint8_t DevAddr[4] = { XXXXXXXXXXXXXXXXXXXXXXXXXXXXX };
 
 // Data Packet to Send to TTN
 // Bytes 0-1: Average temperature over two bytes
@@ -293,7 +294,7 @@ void setup()
   pinMode(PUSH_BUTTON_UP, INPUT_PULLUP);
   pinMode(PUSH_BUTTON_DOWN, INPUT_PULLUP);
 
-  // Start up the 18DS20 library
+  // Start up the DS18B20 library
   sensors_A.begin();
        
   // set the resolution
@@ -302,7 +303,7 @@ void setup()
   sensors_A.setResolution(DS18b20_3, TEMPERATURE_RESOLUTION);  
   sensors_A.setResolution(DS18b20_4, TEMPERATURE_RESOLUTION);
   
-  //Synchronous mode
+  //Synchronous mode, waits for the reply!
   sensors_A.setWaitForConversion(true);
 
   //motorized door state machine init
@@ -515,7 +516,7 @@ void LoraPublish(unsigned char port)
       loraData[15] = lowByte(DigInputs);
   }
   else
-  if(port == 4)//port 4 is used to send door opening/closing progress info only when moving
+  if(port == 4)//port 4 is used to send door opening/closing progress at short intervals only when door is moving
   {
       //Read the Digital inputs states and record them into a Byte to be sent in the message payload
       writeBitmap(false, digitalRead(INTERLCK), digitalRead(SwDOWN), digitalRead(SwUP), digitalRead(STAT2), digitalRead(STAT1), ButtonUPPressed, ButtonDWNPressed);
