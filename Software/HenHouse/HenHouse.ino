@@ -14,6 +14,8 @@ https://github.com/adafruit/TinyLoRa/ (rev 1.0.4)
 
  TODO: 
  Add timeout on door opening closing in case endswitches fail. Report error over MQTT if timeout reached
+ Add reset every day
+ When manually opening door, let it as is for a certain amount of time before letting it automatically go to its position per luminosity
  */
 
 /*
@@ -24,7 +26,7 @@ function Decoder(bytes, port) {
  
   if(port == 3)
   {
-    // Decode bytes to int
+  // Decode bytes to int
     var tmInt = (bytes[0] << 8) | bytes[1];
     var S1Int = (bytes[2] << 8) | bytes[3];
     var S2Int = (bytes[4] << 8) | bytes[5];
@@ -44,13 +46,14 @@ function Decoder(bytes, port) {
     decoded.bat = BattInt / 100;
 
     // Decode digital inputs
+    // writeBitmap(false, digitalRead(INTERLCK), digitalRead(SwDOWN), digitalRead(SwUP), digitalRead(STAT2), digitalRead(STAT1), ButtonUPPressed, ButtonDWNPressed);
     decoded.ButtonDown = (DigInt & 1) === 0?0:1;
     decoded.ButtonUp = (DigInt & 2) === 0?0:1;
-    decoded.Charging = (DigInt & 3) === 0?0:1;
-    decoded.DoneCharging = (DigInt & 4) === 0?0:1;
-    decoded.DoorSwUp = (DigInt & 5) === 0?1:0;
-    decoded.DoorSwDn = (DigInt & 6) === 0?1:0;
-    decoded.DoorIntck = (DigInt & 7) === 0?1:0;
+    decoded.Charging = (DigInt & 4) === 0?0:1;
+    decoded.DoneCharging = (DigInt & 8) === 0?0:1;
+    decoded.DoorSwUp = (DigInt & 16) === 0?0:1;
+    decoded.DoorSwDn = (DigInt & 32) === 0?0:1;
+    decoded.DoorIntck = (DigInt & 64) === 0?0:1;
     return decoded;
   }
   else
@@ -63,9 +66,9 @@ function Decoder(bytes, port) {
     // Decode digital inputs
     decoded.ButtonDown = (DigInt & 1) === 0?0:1;
     decoded.ButtonUp = (DigInt & 2) === 0?0:1;
-    decoded.DoorSwUp = (DigInt & 5) === 0?1:0;
-    decoded.DoorSwDn = (DigInt & 6) === 0?1:0;
-    decoded.DoorIntck = (DigInt & 7) === 0?1:0;
+    decoded.DoorSwUp = (DigInt & 16) === 0?0:1;
+    decoded.DoorSwDn = (DigInt & 32) === 0?0:1;
+    decoded.DoorIntck = (DigInt & 64) === 0?0:1;
     return decoded;
   }
 }*/
@@ -117,7 +120,7 @@ volatile int DoorActualPos = 0;
 #define DoorCLOSE    0
 #define InContact  0  //endswitches state when in limit position
 
-const unsigned long DoorTimeConstant = 30000L; //30 sec
+const unsigned long DoorTimeConstant = 60000L; //30 sec
 unsigned long DoorCycleStart = 0L;
 unsigned long DoorCycleEnd = 0L;
 
@@ -265,7 +268,7 @@ void setup()
   Serial.begin(9600);
   
   //uncomment this in debug mode
-  while (! Serial);
+  //while (! Serial);
  
   // Initialize pin LED_BUILTIN as an output
   pinMode(LED_BUILTIN, OUTPUT);
@@ -424,8 +427,8 @@ void loop()
      
 
     // Go to sleep if door is at desired position and nothing else to do
-    //if((int)DoorWantedPos == DoorActualPos)
-    //  sleep();
+    if((int)DoorWantedPos == DoorActualPos)
+      sleep();
 }
 
 void LoraPublish(unsigned char port)
