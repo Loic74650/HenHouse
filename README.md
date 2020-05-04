@@ -8,11 +8,10 @@
 <li>Entrance guillotine-style door is motorized. Two reed end-switches detect the door open/close positions</li>
 <li>UP/DOWN interface buttons to manually force door opening/closing</li>
 <li>Door automatically opens/closes at sunrise and sunset (function of an ambient light threshold)</li>
-<li>Measures temperature in 4 egg-slots (aim is to detect when a new egg was layed) + computes an average</li>
+<li>Measures individual temperatures in 4 nesting boxes (aim is to detect when a new egg was layed) + computes an average</li>
 <li>Runs on a 3.7V 4400mAh Lithium Ion Battery Pack and a 6V, 1W solar panel</li>
-<li>Reports all measured inputs over LoRaWan every minute or when an interface button is activated</li>
 <li>Goes to DeepSleep until UP/DOWN buttons are pressed + wakes up every minute to broadcast data over LoRaWan measured inputs</li>
-<li>broadcasts every 5 minutes the systems’ metrics (temperatures, ambient light level, door position, battery level and charging status), received by home automation system in JSON format via MQTT broker</li><br /><br />
+<li>broadcasts every few minutes the systems’ metrics (temperatures, ambient light level, door position, battery level and charging status), received by home automation system in JSON format via MQTT broker</li><br /><br />
 
 In order to broadcast data to the TTN network, you need to register an account as well as the Feather board. <a title="https://learn.adafruit.com/the-things-network-for-feather/using-a-feather-32u4" href="https://learn.adafruit.com/the-things-network-for-feather/using-a-feather-32u4">Detailed instructions here</a>.<br /><br />
 
@@ -32,3 +31,6 @@ In order to broadcast data to the TTN network, you need to register an account a
 
 
 <p align="center"> <img src="/Hardware/HenHouse schematics.png" width="702" title="Schematics"> </p> <br /><br />
+<p align="center"> <img src="/Images/HenHouseMotorizedDoor.JPG" width="702" title="Schematics"> </p> <br /><br />
+<p align="center"> <img src="/Images/HenHouseElec1.JPG" width="702" title="Schematics"> </p> <br /><br />
+<p align="center"> <img src="/Images/HenHouseView.png" width="702" title="Schematics"> </p> <br /><br />
