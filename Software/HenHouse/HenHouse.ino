@@ -91,10 +91,10 @@
   }*/
 /************************** Configuration ***********************************/
 
-#define SLEEP
-//#define DOOR_PROGRESS
+#define SLEEP             ->comment this line to prevent µc from sleeping
+//#define DOOR_PROGRESS   ->comment this line to prevent code from broadcasting door % position while opening/closing (saves Lora airtime)
 
-//#define DEBUG
+//#define DEBUG           ->comment this line to prevent code from writing debug messages to serial port (must be commented when SLEEP is uncommented)
 #include "DebugUtils.h"
 
 // Data logging configuration.
