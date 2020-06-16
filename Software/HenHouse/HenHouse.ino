@@ -29,10 +29,6 @@
   https://github.com/bricofoy/yasm (rev 0.9.2)
   https://github.com/adafruit/TinyLoRa/ (rev 1.0.4)
 
-  TODO:
-  Add timeout on door opening closing in case endswitches fail. Report error over MQTT if timeout reached
-  Add reset every day
-  When manually opening door, let it as is for a certain amount of time before letting it automatically go to its position per luminosity
 */
 
 /*
@@ -50,8 +46,9 @@
     var S3Int = (bytes[6] << 8) | bytes[7];
     var S4Int = (bytes[8] << 8) | bytes[9];
     var LumInt = (bytes[10] << 8) | bytes[11];
-    var BattInt = (bytes[12] << 8) | bytes[13];
-    var DigInt = (bytes[14] << 8) | bytes[15];
+    var SoLumInt = (bytes[12] << 8) | bytes[13];
+    var BattInt = (bytes[14] << 8) | bytes[15];
+    var DigInt = (bytes[16] << 8) | bytes[17];
 
     // Decode int to float
     decoded.Mtemp = tmInt / 100;
@@ -60,6 +57,7 @@
     decoded.S3temp = S3Int / 100;
     decoded.S4temp = S4Int / 100;
     decoded.lum = LumInt / 100;
+    decoded.Solum = SoLumInt / 100;
     decoded.bat = BattInt / 100;
 
     // Decode digital inputs
@@ -93,6 +91,13 @@
 
 #define SLEEP             ->comment this line to prevent µc from sleeping
 //#define DOOR_PROGRESS   ->comment this line to prevent code from broadcasting door % position while opening/closing (saves Lora airtime)
+#define DOOR_BUZZ         ->comment this line to prevent buzzer from going off while door opening/closing
+
+//Buzzer PWM pin
+#define BUZ 5
+int Frequ = 4000;
+int Duration = 300;
+bool Toggle = 0;
 
 //#define DEBUG           ->comment this line to prevent code from writing debug messages to serial port (must be commented when SLEEP is uncommented)
 #include "DebugUtils.h"
@@ -113,7 +118,7 @@
 #include "arduino_secrets.h" //this file should be placed in same folder as the sketch and contains your TTN session keys, see below for more details
 
 // Firmware revision
-String Firmw = "0.0.1";
+String Firmw = "0.0.3";
 
 
 #define MAX_SLEEP_ITERATIONS   LOGGING_FREQ_SECONDS / 8  // Number of times to sleep (for 8 seconds) before
@@ -121,7 +126,7 @@ String Firmw = "0.0.1";
 // Don't change this unless you also change the
 // watchdog timer configuration.
 
-#define LumThreshold_LOW  5                 //Luminosity threshold to actuate door in the evenings
+#define LumThreshold_LOW  3                 //Luminosity threshold to actuate door in the evenings
 #define LumThreshold_HIGH 30                //Luminosity threshold to actuate door in the mornings
 
 volatile bool watchdogActivated = false;
@@ -131,6 +136,7 @@ volatile bool DoorMoving = false;
 volatile bool DoorDWNStateForced = false;
 volatile bool DoorUPStateForced = false;
 volatile float measuredvlum = LumThreshold_HIGH;
+volatile float measuredSolarlum = LumThreshold_HIGH;
 
 volatile int sleepIterations = 0;
 
@@ -180,6 +186,9 @@ char temp[50];
 //Analog input pin to read the ambient luminosity level
 #define VLUMPIN A0
 
+//Analog input pin to read the solar panel voltage
+#define SOLPIN A7
+
 // OneWire instance to communicate with the 4 DS18B20 temperature sensors
 OneWire oneWire_A(ONE_WIRE_BUS_A);
 
@@ -205,9 +214,10 @@ DeviceAddress DS18b20_2 = { 0x28, 0xD4, 0x68, 0x00, 0x0C, 0x00, 0x00, 0x92 };//S
 // Bytes 10-11: Luminosity voltage over two bytes
 // Bytes 12-13: Battery voltage over two bytes
 // Bytes 14-15: digital inputs reading
-unsigned char loraData[16];
+unsigned char loraData[18];
 uint8_t DigInputs = 0;
 int16_t lumInt = 0;
+int16_t SollumInt = 0;
 int16_t battInt = 0;
 int16_t tmInt, S1Int, S2Int, S3Int, S4Int;
 
@@ -217,9 +227,9 @@ TinyLoRa lora = TinyLoRa(7, 8);
 //Interrupt handle if UP push button was pressed
 void ButtonUPWake()
 {
-  #ifdef SLEEP
-    sleep_disable ();         // first thing after waking from sleep:
-  #endif
+#ifdef SLEEP
+  sleep_disable ();         // first thing after waking from sleep:
+#endif
   detachInterrupt (digitalPinToInterrupt (PUSH_BUTTON_UP));      // stop LOW interrupt
   //wdt_disable();  // disable watchdog
   ButtonUPPressed = 1;
@@ -231,9 +241,9 @@ void ButtonUPWake()
 //Interrupt handle if DOWN push button was pressed
 void ButtonDWNWake()
 {
-  #ifdef SLEEP
-    sleep_disable ();         // first thing after waking from sleep:
-  #endif
+#ifdef SLEEP
+  sleep_disable ();         // first thing after waking from sleep:
+#endif
   detachInterrupt (digitalPinToInterrupt (PUSH_BUTTON_DOWN));      // stop LOW interrupt
   //wdt_disable();  // disable watchdog
   ButtonDWNPressed = 1;
@@ -248,9 +258,9 @@ ISR(WDT_vect)
 {
   // Set the watchdog activated flag.
   // Note that you shouldn't do much work inside an interrupt handler.
-  #ifdef SLEEP
-    sleep_disable ();         // first thing after waking from sleep:
-  #endif
+#ifdef SLEEP
+  sleep_disable ();         // first thing after waking from sleep:
+#endif
   watchdogActivated = true;
 }
 
@@ -342,10 +352,17 @@ void setup()
   pinMode(AIN1, OUTPUT);
   pinMode(AIN2, OUTPUT);
   pinMode(STBY, OUTPUT);
+  pinMode(BUZ, OUTPUT);
+
+  //Analog inputs
+  pinMode(VLUMPIN, INPUT);
+  pinMode(VBATTPIN, INPUT);
+  pinMode(SOLPIN, INPUT);
 
   digitalWrite(STBY, LOW);
   digitalWrite(AIN1, LOW);
   digitalWrite(AIN2, LOW);
+  digitalWrite(BUZ, LOW);
 
   // Initialize push buttons as inputs
   pinMode(PUSH_BUTTON_UP, INPUT_PULLUP);
@@ -451,14 +468,13 @@ void loop()
     }
   }
 
-  //Open door at sunrise and close it at sunset, based on a 30% ambient luminosity threshold
-  if ((!DoorDWNStateForced) && (measuredvlum > LumThreshold_HIGH)) //Door is closed and luminosity > LumThreshold_HIGH% ->open door
+  //Open door at sunrise and close it at sunset, based on an ambient luminosity threshold
+  if ((!DoorDWNStateForced) && (measuredSolarlum > LumThreshold_HIGH)) //Door is closed and luminosity > LumThreshold_HIGH% ->open door
   {
     DoorWantedPos = 100.0;
     DoorUPStateForced = 0;
   }
-  else 
-  if((!DoorUPStateForced) && (measuredvlum < LumThreshold_LOW)) //Door is open and luminosity < LumThreshold_LOW% ->close door
+  else if ((!DoorUPStateForced) && (measuredSolarlum < LumThreshold_LOW)) //Door is open and luminosity < LumThreshold_LOW% ->close door
   {
     DoorWantedPos = 0.0;
     DoorDWNStateForced = 0;
@@ -488,6 +504,11 @@ void LoraPublish(unsigned char port)
     measuredvlum *= 100.0;  // 100%
     measuredvlum /= 1024; // convert to %
 
+    //Read solar panel luminosity level
+    measuredSolarlum = analogRead(SOLPIN);
+    measuredSolarlum *= 100.0;  // 100%
+    measuredSolarlum /= 1024; // convert to %
+
     //Read battery level
     float measuredbatt = analogRead(VBATTPIN);
     measuredbatt *= 6.6;  // 100% = 3.3*2V because of voltage divider
@@ -495,6 +516,7 @@ void LoraPublish(unsigned char port)
 
     // encode float as int
     lumInt = round(measuredvlum * 100);
+    SollumInt = round(measuredSolarlum * 100);
     battInt = round(measuredbatt * 100);
     tmInt = round(tm * 100);
     S1Int = round(S1 * 100);
@@ -511,6 +533,9 @@ void LoraPublish(unsigned char port)
     msg += F("V\t");
     msg += F("Lum: ");
     msg += measuredvlum;
+    msg += F("%\t");
+    msg += F("SoLum: ");
+    msg += measuredSolarlum;
     msg += F("%\t");
     msg += F("Avg Temp: ");
     msg += tm;
@@ -552,11 +577,14 @@ void LoraPublish(unsigned char port)
     loraData[10] = highByte(lumInt);
     loraData[11] = lowByte(lumInt);
 
-    loraData[12] = highByte(battInt);
-    loraData[13] = lowByte(battInt);
+    loraData[12] = highByte(SollumInt);
+    loraData[13] = lowByte(SollumInt);
 
-    loraData[14] = highByte(0);
-    loraData[15] = lowByte(DigInputs);
+    loraData[14] = highByte(battInt);
+    loraData[15] = lowByte(battInt);
+
+    loraData[16] = highByte(0);
+    loraData[17] = lowByte(DigInputs);
   }
   else if (port == 4) //port 4 is used to send door opening/closing progress at short intervals only when door is moving
   {
@@ -645,11 +673,11 @@ void stopDoor()
 
 void Door_wait()
 {
-/*  String UPSW = "UP_SW: "; UPSW +=digitalRead(SwUP);
-  DEBUG_PRINT(UPSW);
-  String DWNSW = "DWN_SW: "; DWNSW +=digitalRead(SwDOWN);
-  DEBUG_PRINT(DWNSW);
-*/
+  /*  String UPSW = "UP_SW: "; UPSW +=digitalRead(SwUP);
+    DEBUG_PRINT(UPSW);
+    String DWNSW = "DWN_SW: "; DWNSW +=digitalRead(SwDOWN);
+    DEBUG_PRINT(DWNSW);
+  */
   if (Door.isFirstRun())
   {
     String msg = "Actual: "; msg += DoorActualPos; msg += " - Wanted: "; msg += DoorWantedPos;
@@ -665,7 +693,7 @@ void Door_wait()
 
   if (digitalRead(SwUP) == InContact) DoorActualPos = 100.0;
   if (digitalRead(SwDOWN) == InContact) DoorActualPos = 0.0;
-  
+
   if (DoorActualPos == DoorWantedPos)
   {
     if (DoorMoving)
@@ -689,18 +717,21 @@ void Door_moveOpen()
     String msg = "Actual: "; msg += DoorActualPos; msg += " - Wanted: "; msg += DoorWantedPos;
     DEBUG_PRINT(msg);
   }
-  
+
   if (digitalRead(SwUP) == InContact) DoorActualPos = 100.0;
   if (digitalRead(SwDOWN) == InContact) DoorActualPos = 0.0;
-  if(DoorActualPos == DoorWantedPos)
-  Door.next(Door_wait);
-  
+  if (DoorActualPos == DoorWantedPos)
+    Door.next(Door_wait);
+
   moveDoor(DoorOPEN);
-  if(Door.elapsed(DoorTimeConstant / 10))
+  if (Door.elapsed(DoorTimeConstant / 10))
   {
     DoorActualPos += 10;
 #ifdef DOOR_PROGRESS
     LoraPublish(4);
+#endif
+#ifdef DOOR_BUZZ
+    tone(BUZ, Frequ, Duration);
 #endif
     String msg = "Actual: "; msg += DoorActualPos; msg += " - Wanted: "; msg += DoorWantedPos;
     DEBUG_PRINT(msg);
@@ -716,18 +747,21 @@ void Door_moveClose()
     String msg = "Actual: "; msg += DoorActualPos; msg += " - Wanted: "; msg += DoorWantedPos;
     DEBUG_PRINT(msg);
   }
-  
+
   if (digitalRead(SwUP) == InContact) DoorActualPos = 100.0;
   if (digitalRead(SwDOWN) == InContact) DoorActualPos = 0.0;
-  if(DoorActualPos == DoorWantedPos)
-  Door.next(Door_wait);
-  
+  if (DoorActualPos == DoorWantedPos)
+    Door.next(Door_wait);
+
   moveDoor(DoorCLOSE);
   if (Door.elapsed(DoorTimeConstant / 10))
   {
     DoorActualPos -= 10;
 #ifdef DOOR_PROGRESS
     LoraPublish(4);
+#endif
+#ifdef DOOR_BUZZ
+    tone(BUZ, Frequ, Duration);
 #endif
     String msg = "Actual: "; msg += DoorActualPos; msg += " - Wanted: "; msg += DoorWantedPos;
     DEBUG_PRINT(msg);
