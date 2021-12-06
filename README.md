@@ -1,24 +1,24 @@
-<h2>HenHouse</h2>
-<h3>solar powered smart and automated hen house system with LoRaWan connectivity (ATmega32u4)</h3><br />
+<h2>HenHouse V2.0</h2>
+<h3>solar powered smart and automated hen house system with LoRaWan connectivity</h3><br />
 
 <p align="center"> <img src="/Images/P_2.jpg" width="702" title="Schematics"> </p> <br /><br />
 
 <h4>Key features</h4>
-<li>Runs on an Adafruit Feather 32u4 board (ATmega32u4) equiped with a LoRa Radio Module</li>
+<li>Runs on an Adafruit Feather M0 board (ATSAMD21G18 ARM Cortex M0 processor, clocked at 48 MHz and at 3.3V logic) equiped with a LoRa Radio Module</li>
 <li>Entrance guillotine-style door is motorized. Two reed end-switches detect the door open/close positions</li>
 <li>UP/DOWN interface buttons to manually force door opening/closing</li>
-<li>Door automatically opens/closes at sunrise and sunset (function of an ambient light threshold, measured via the solar panel voltage output)</li>
-<li>When door is moving, a buzzer makes intermitent beeps in order to let the chiken now it is bedtime</li>
-<li>Measures individual temperatures in 4 nesting boxes (aim is to detect when a new egg was layed) + computes an average</li>
+<li>Door automatically opens/closes at sunrise and sunset (as a function of an ambient light threshold, measured via the solar panel voltage output)</li>
+<li>When door is moving, a buzzer makes intermitent beeps in order to let the chiken know it is bedtime</li>
+<li>Measures the individual temperature of 4 separate nesting boxes (aim is to detect when a new egg was layed) + computes an average</li>
 <li>Runs on a 3.7V 4400mAh Lithium Ion Battery Pack and a 6V, 1W solar panel</li>
-<li>Goes to DeepSleep until UP/DOWN buttons are pressed + wakes up every minute to broadcast data over LoRaWan measured inputs</li>
-<li>broadcasts every few minutes the systems’ metrics (temperatures, ambient light level, door position, battery level and charging status), received by home automation system in JSON format via MQTT broker</li><br /><br />
+<li>Goes to DeepSleep until UP/DOWN buttons are pressed </li>
+<li>broadcasts over LoraWan every three minutes the systems’ metrics (temperatures, ambient light level, door position, battery level and charging status), received by home automation system in JSON format via MQTT broker</li><br /><br />
 
-In order to broadcast data to the TTN network, you need to register an account as well as the Feather board. <a title="https://learn.adafruit.com/the-things-network-for-feather/using-a-feather-32u4" href="https://learn.adafruit.com/the-things-network-for-feather/using-a-feather-32u4">Detailed instructions here</a>.<br /><br />
+In order to broadcast data to the TTN network, you need to register an account as well as the Feather board. <a title="https://learn.adafruit.com/the-things-network-for-feather?view=all" href="https://learn.adafruit.com/the-things-network-for-feather?view=all">Detailed instructions here</a>.<br /><br />
 
 
 <h4>Hardware</h4>
-<li>x1 <a title="https://learn.adafruit.com/adafruit-feather-32u4-radio-with-lora-radio-module" href="https://learn.adafruit.com/adafruit-feather-32u4-radio-with-lora-radio-module">Adafruit Feather 32u4 LoRa Radio (RFM9x)</a></li>
+<li>x1 <a title="https://learn.adafruit.com/adafruit-feather-m0-radio-with-lora-radio-module/downloads" href="https://learn.adafruit.com/adafruit-feather-m0-radio-with-lora-radio-module/downloads">Adafruit Feather M0 LoRa Radio (RFM9x)</a></li>
 <li>x1 <a title="https://www.adafruit.com/product/390" href="https://www.adafruit.com/product/390">Solar Lithium Ion/Polymer charger</a></li>
 <li>x1 <a title="https://www.sparkfun.com/products/14451" href="https://www.sparkfun.com/products/14451">TB6612FNG</a> motor driver</li>
 <li>x1 <a title="https://www.adafruit.com/product/3809" href="https://www.adafruit.com/product/3809">6V 1W Solar Panel</a></li>

@@ -1,4 +1,5 @@
-/* HenHouse (c) Loic74 <loic74650@gmail.com> 2020
+/*
+  HenHouse V2.0 (c) Loic74 <loic74650@gmail.com> 2020-2021
   HenHouse solar-powered intelligent controller:
   UP/DOWN interface buttons to control Guillotine door opening/closing
   Door has endswitches to stop opening/closing as well as a timeout if endswitches were not reached in time
@@ -6,20 +7,29 @@
   Measures battery voltage as well as charging state (charging, done)
   Goes to DeepSleep until UP/DOWN buttons are pressed or until watchdog wakes it up (every 5 minutes) to broadcast measured inputs data over LoRaWan
 
-  Visit your thethingsnetwork.org device console
+  Visit your https://eu1.cloud.thethings.network/console/ device console
   to create an account, and obtain the session keys below which are unique to every board.
 
   You should then create a file called "arduino_secrets.h", save it in the project folder, and into which you will paste those unique keys in the following form:
 
   -------------------------------------------------------------------------------------------
-  // Network Session Key (MSB)
-  uint8_t NwkSkey[16] = { 0x4C, 0xD5, 0xA5, 0x70, 0xFE, 0x7B, 0xC5, 0xDE, 0x52, XXXXXXXXXXXXXXXXXXXXXXXXX };
 
-  // Application Session Key (MSB)
-  uint8_t AppSkey[16] = { 0x88, 0xB5, 0x4C, 0x7B, 0xD2, 0x12, 0x8B, 0xE7, 0x6A, XXXXXXXXXXXXXXXXXXXXXXXXX };
+  // This EUI must be in little-endian format (lsb), so least-significant-byte
+  // first. When copying an EUI from ttnctl output, this means to reverse
+  // the bytes. For TTN issued EUIs the last bytes should be 0xD5, 0xB3,
+  // 0x70.
+  static const u1_t PROGMEM APPEUI[8]={ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+  void os_getArtEui (u1_t* buf) { memcpy_P(buf, APPEUI, 8);}
 
-  // Device Address (MSB)
-  uint8_t DevAddr[4] = { 0x26, XXXXXXXXXXXXXXXXX };
+  // This should also be in little endian format (lsb), see above.
+  static const u1_t PROGMEM DEVEUI[8]={ 0x13, 0x05, 0x11, 0x00, 0xXX, 0xXX, 0xXX, 0xXX };
+  void os_getDevEui (u1_t* buf) { memcpy_P(buf, DEVEUI, 8);}
+
+  // This key should be in big endian format (msb) (or, since it is not really a
+  // number but a block of memory, endianness does not really apply). In
+  // practice, a key taken from ttnctl can be copied as-is.
+  static const u1_t PROGMEM APPKEY[16] = { 0x0A, 0x60, 0xDE, 0x98, 0x1A, 0x43, 0xC8, 0x1B, 0xF2, 0xXX, 0xXX, 0xXX, 0xXX, 0xXX, 0xXX, 0xXX };
+  void os_getDevKey (u1_t* buf) {  memcpy_P(buf, APPKEY, 16);}
 
   --------------------------------------------------------------------------------------------
 
@@ -27,8 +37,9 @@
   https://github.com/PaulStoffregen/OneWire (rev 2.3.4)
   https://github.com/milesburton/Arduino-Temperature-Control-Library (rev 3.7.2)
   https://github.com/bricofoy/yasm (rev 0.9.2)
-  https://github.com/adafruit/TinyLoRa/ (rev 1.0.4)
-
+  https://github.com/mcci-catena/arduino-lmic (rev 4.1.0)
+  http://www.airspayce.com/mikem/arduino/RadioHead/ (rev 1.120)
+  https://www.arduino.cc/libraries/ArduinoLowPower (rev 1.2.2)
 */
 
 /*
@@ -39,26 +50,31 @@
 
   if(port == 3)
   {
-  // Decode bytes to int
-    var tmInt = (bytes[0] << 8) | bytes[1];
-    var S1Int = (bytes[2] << 8) | bytes[3];
-    var S2Int = (bytes[4] << 8) | bytes[5];
-    var S3Int = (bytes[6] << 8) | bytes[7];
-    var S4Int = (bytes[8] << 8) | bytes[9];
-    var LumInt = (bytes[10] << 8) | bytes[11];
-    var SoLumInt = (bytes[12] << 8) | bytes[13];
-    var BattInt = (bytes[14] << 8) | bytes[15];
-    var DigInt = (bytes[16] << 8) | bytes[17];
+    var rawTM = bytes[0] + bytes[1] * 256;
+    decoded.Mtemp = sflt162f(rawTM) * 100;
 
-    // Decode int to float
-    decoded.Mtemp = tmInt / 100;
-    decoded.S1temp = S1Int / 100;
-    decoded.S2temp = S2Int / 100;
-    decoded.S3temp = S3Int / 100;
-    decoded.S4temp = S4Int / 100;
-    decoded.lum = LumInt / 100;
-    decoded.Solum = SoLumInt / 100;
-    decoded.bat = BattInt / 100;
+    var rawS1 = bytes[2] + bytes[3] * 256;
+    decoded.S1temp = sflt162f(rawS1) * 100;
+
+    var rawS2 = bytes[4] + bytes[5] * 256;
+    decoded.S2temp = sflt162f(rawS2) * 100;
+
+    var rawS3 = bytes[6] + bytes[7] * 256;
+    decoded.S3temp = sflt162f(rawS3) * 100;
+
+    var rawS4 = bytes[8] + bytes[9] * 256;
+    decoded.S4temp = sflt162f(rawS4) * 100;
+
+    var rawlum = bytes[10] + bytes[11] * 256;
+    decoded.lum = sflt162f(rawlum) * 100;
+
+    var rawSolum = bytes[12] + bytes[13] * 256;
+    decoded.Solum = sflt162f(rawSolum) * 100;
+
+    var rawbat = bytes[14] + bytes[15] * 256;
+    decoded.bat = sflt162f(rawbat) * 100;
+
+    var DigInt = (bytes[16] << 8) | bytes[17];
 
     // Decode digital inputs
     // writeBitmap(false, digitalRead(INTERLCK), digitalRead(SwDOWN), digitalRead(SwUP), digitalRead(STAT2), digitalRead(STAT1), ButtonUPPressed, ButtonDWNPressed);
@@ -86,6 +102,47 @@
     decoded.DoorIntck = (DigInt & 64) === 0?0:1;
     return decoded;
   }
+  }
+
+  function sflt162f(rawSflt16)
+  {
+  // rawSflt16 is the 2-byte number decoded from wherever;
+  // it's in range 0..0xFFFF
+  // bit 15 is the sign bit
+  // bits 14..11 are the exponent
+  // bits 10..0 are the the mantissa. Unlike IEEE format,
+  // the msb is transmitted; this means that numbers
+  // might not be normalized, but makes coding for
+  // underflow easier.
+  // As with IEEE format, negative zero is possible, so
+  // we special-case that in hopes that JavaScript will
+  // also cooperate.
+  //
+  // The result is a number in the open interval (-1.0, 1.0);
+  //
+  // throw away high bits for repeatability.
+  rawSflt16 &= 0xFFFF;
+
+  // special case minus zero:
+  if (rawSflt16 == 0x8000)
+    return -0.0;
+
+  // extract the sign.
+  var sSign = ((rawSflt16 & 0x8000) !== 0) ? -1 : 1;
+
+  // extract the exponent
+  var exp1 = (rawSflt16 >> 11) & 0xF;
+
+  // extract the "mantissa" (the fractional part)
+  var mant1 = (rawSflt16 & 0x7FF) / 2048.0;
+
+  // convert back to a floating point number. We hope
+  // that Math.pow(2, k) is handled efficiently by
+  // the JS interpreter! If this is time critical code,
+  // you can replace by a suitable shift and divide.
+  var f_unscaled = sSign * mant1 * Math.pow(2, exp1 - 15);
+
+  return f_unscaled;
   }*/
 /************************** Configuration ***********************************/
 
@@ -103,33 +160,31 @@ bool Toggle = 0;
 #include "DebugUtils.h"
 
 // Data logging configuration.
-#define LOGGING_FREQ_SECONDS   60       // Seconds to wait before a new sensor reading is logged.
+#define LOGGING_FREQ_SECONDS   180       // Seconds to wait before a new sensor reading is logged ans sent over LoRaWan.
 
-
-#include <TinyLoRa.h>
 #include <SPI.h>
-#include <avr/sleep.h>
-#include <avr/power.h>
-#include <avr/wdt.h>
 #include "OneWire.h"
 #include <DallasTemperature.h>
 #include <yasm.h>
 #include <Streaming.h>
+#include <RH_RF95.h>
+#include "ArduinoLowPower.h"
+#include <lmic.h>
+#include <hal/hal.h>
 #include "arduino_secrets.h" //this file should be placed in same folder as the sketch and contains your TTN session keys, see below for more details
 
+
 // Firmware revision
-String Firmw = "0.0.3";
+String Firmw = "2.0";
 
 
-#define MAX_SLEEP_ITERATIONS   LOGGING_FREQ_SECONDS / 8  // Number of times to sleep (for 8 seconds) before
+#define MAX_SLEEP_ITERATIONS   LOGGING_FREQ_SECONDS / 10  // Number of times to sleep (for 10 seconds) before
 // a sensor reading is taken and sent to the server.
-// Don't change this unless you also change the
-// watchdog timer configuration.
+// Don't change this but rather the variable "LOGGING_FREQ_SECONDS" above.
 
-#define LumThreshold_LOW  3                 //Luminosity threshold to actuate door in the evenings
+#define LumThreshold_LOW  5                 //Luminosity threshold to actuate door in the evenings
 #define LumThreshold_HIGH 30                //Luminosity threshold to actuate door in the mornings
 
-volatile bool watchdogActivated = false;
 volatile bool ButtonUPPressed = false;
 volatile bool ButtonDWNPressed = false;
 volatile bool DoorMoving = false;
@@ -137,14 +192,13 @@ volatile bool DoorDWNStateForced = false;
 volatile bool DoorUPStateForced = false;
 volatile float measuredvlum = LumThreshold_HIGH;
 volatile float measuredSolarlum = LumThreshold_HIGH;
-
 volatile int sleepIterations = 0;
 
 // Data wire is connected to input digital pin A4 of the Adafruit Feather 32u4 LoRa
 #define ONE_WIRE_BUS_A A4
 
 //Motorized door state machine
-volatile YASM Door;
+static YASM Door;
 
 //Door position
 volatile double DoorWantedPos = 100.0;
@@ -168,8 +222,8 @@ char temp[50];
 #define STAT1  12  //Battery charging status
 #define STAT2  11  //Battery done charging status
 #define SwUP  10  //endswitch UP
-#define SwDOWN  9  //endswitch DOWN
-#define INTERLCK  9  //Main Door Interlock (not used yet)
+#define SwDOWN  20  //endswitch DOWN
+#define INTERLCK  20  //Main Door Interlock (not used yet)
 
 //Motor controller pins
 #define AIN1 A3
@@ -184,10 +238,10 @@ char temp[50];
 #define VBATTPIN A1
 
 //Analog input pin to read the ambient luminosity level
-#define VLUMPIN A0
+#define VLUMPIN A7
 
-//Analog input pin to read the solar panel voltage
-#define SOLPIN A7
+//Analog input pin to read the solar panel voltage (better option to measure the ambient luminosity level)
+#define SOLPIN A0
 
 // OneWire instance to communicate with the 4 DS18B20 temperature sensors
 OneWire oneWire_A(ONE_WIRE_BUS_A);
@@ -211,27 +265,48 @@ DeviceAddress DS18b20_2 = { 0x28, 0xD4, 0x68, 0x00, 0x0C, 0x00, 0x00, 0x92 };//S
 // Bytes 4-5: Slot2 temperature over two bytes
 // Bytes 6-7: Slot3 temperature over two bytes
 // Bytes 8-9: Slot4 temperature over two bytes
-// Bytes 10-11: Luminosity voltage over two bytes
-// Bytes 12-13: Battery voltage over two bytes
-// Bytes 14-15: digital inputs reading
-unsigned char loraData[18];
+// Bytes 10-11: Luminosity voltage from varistor over two bytes
+// Bytes 12-13: Luminosity voltage from solar panel output voltage over two bytes
+// Bytes 14-15: Battery voltage over two bytes
+// Bytes 16-17: digital inputs reading
+static uint8_t loraData[20];
 uint8_t DigInputs = 0;
-int16_t lumInt = 0;
-int16_t SollumInt = 0;
-int16_t battInt = 0;
-int16_t tmInt, S1Int, S2Int, S3Int, S4Int;
+static osjob_t sendjob;
 
-// Pinout for Adafruit Feather 32u4 LoRa
-TinyLoRa lora = TinyLoRa(7, 8);
+// Pin mapping for Adafruit Feather M0 LoRa
+// /!\ By default Adafruit Feather M0's pin 6 and DIO1 are not connected.
+// Please ensure they are connected.
+const lmic_pinmap lmic_pins = {
+  .nss = 8,
+  .rxtx = LMIC_UNUSED_PIN,
+  .rst = 4,
+  .dio = {3, 6, LMIC_UNUSED_PIN},
+  .rxtx_rx_active = 0,
+  .rssi_cal = 8,              // LBT cal for the Adafruit Feather M0 LoRa, in dB
+  .spi_freq = 8000000,
+};
+
+//pinout of radio module for feather m0
+#define RFM95_CS 8
+#define RFM95_RST 4
+#define RFM95_INT 3
+
+// Singleton instance of the radio driver
+// Will be used to put the radio module to deep sleep
+RH_RF95 rf95(RFM95_CS, RFM95_INT);
+
+//ready to go to sleep?
+static bool DoorAtPosition = false;
+volatile bool ReadyToSleep = false;
+volatile bool JoinedOK = false;
 
 //Interrupt handle if UP push button was pressed
 void ButtonUPWake()
 {
 #ifdef SLEEP
-  sleep_disable ();         // first thing after waking from sleep:
+  DoorAtPosition = false;
 #endif
   detachInterrupt (digitalPinToInterrupt (PUSH_BUTTON_UP));      // stop LOW interrupt
-  //wdt_disable();  // disable watchdog
   ButtonUPPressed = 1;
   ButtonDWNPressed = 0;
   DoorUPStateForced = 1;
@@ -242,79 +317,14 @@ void ButtonUPWake()
 void ButtonDWNWake()
 {
 #ifdef SLEEP
-  sleep_disable ();         // first thing after waking from sleep:
+  DoorAtPosition = false;
 #endif
   detachInterrupt (digitalPinToInterrupt (PUSH_BUTTON_DOWN));      // stop LOW interrupt
-  //wdt_disable();  // disable watchdog
   ButtonDWNPressed = 1;
   ButtonUPPressed = 0;
   DoorDWNStateForced = 1;
   DoorUPStateForced = 0;
 }
-
-
-// Define watchdog timer interrupt.
-ISR(WDT_vect)
-{
-  // Set the watchdog activated flag.
-  // Note that you shouldn't do much work inside an interrupt handler.
-#ifdef SLEEP
-  sleep_disable ();         // first thing after waking from sleep:
-#endif
-  watchdogActivated = true;
-}
-
-void SetupWDog()
-{
-  // Setup the watchdog timer to run an interrupt which
-  // wakes the Arduino from sleep every 8 seconds.
-
-  // Note that the default behavior of resetting the Arduino
-  // with the watchdog will be disabled.
-
-  // This next section of code is timing critical, so interrupts are disabled.
-  // See more details of how to change the watchdog in the ATmega328P datasheet
-  // around page 50, Watchdog Timer.
-  noInterrupts();
-
-  // Set the watchdog reset bit in the MCU status register to 0.
-  MCUSR &= ~(1 << WDRF);
-
-  // Set WDCE and WDE bits in the watchdog control register.
-  WDTCSR |= (1 << WDCE) | (1 << WDE);
-
-  // Set watchdog clock prescaler bits to a value of 8 seconds.
-  WDTCSR = (1 << WDP0) | (1 << WDP3);
-
-  // Enable watchdog as interrupt only (no reset).
-  WDTCSR |= (1 << WDIE);
-
-  // Enable interrupts again.
-  interrupts();
-}
-
-#ifdef SLEEP
-// Put the Arduino to sleep.
-void sleep()
-{
-  // Set sleep to full power down.  Only external interrupts or
-  // the watchdog timer can wake the CPU!
-  set_sleep_mode(SLEEP_MODE_PWR_DOWN);
-
-  // Turn off the ADC while asleep.
-  power_adc_disable();
-
-  // Enable sleep and enter sleep mode.
-  sleep_mode();
-
-  // CPU is now asleep and program execution completely halts!
-  // Once awake, execution will resume at this point.
-
-  // When awake, disable sleep mode and turn on all devices.
-  //sleep_disable();
-  power_all_enable();
-}
-#endif
 
 //Set individual bits of the DigInputs Byte
 void writeBitmap(bool a, bool b, bool c, bool d, bool e, bool f, bool g, bool h)
@@ -331,6 +341,145 @@ void writeBitmap(bool a, bool b, bool c, bool d, bool e, bool f, bool g, bool h)
   DigInputs |= (h & 1) << 0;
 }
 
+void printHex2(unsigned v) {
+  v &= 0xff;
+  if (v < 16)
+    Serial.print('0');
+  Serial.print(v, HEX);
+}
+
+void onEvent (ev_t ev) {
+  Serial.print(os_getTime());
+  Serial.print(": ");
+  switch (ev) {
+    case EV_SCAN_TIMEOUT:
+      Serial.println(F("EV_SCAN_TIMEOUT"));
+      break;
+    case EV_BEACON_FOUND:
+      Serial.println(F("EV_BEACON_FOUND"));
+      break;
+    case EV_BEACON_MISSED:
+      Serial.println(F("EV_BEACON_MISSED"));
+      break;
+    case EV_BEACON_TRACKED:
+      Serial.println(F("EV_BEACON_TRACKED"));
+      break;
+    case EV_JOINING:
+      Serial.println(F("EV_JOINING"));
+      break;
+    case EV_JOINED:
+      Serial.println(F("EV_JOINED"));
+      {
+        u4_t netid = 0;
+        devaddr_t devaddr = 0;
+        u1_t nwkKey[16];
+        u1_t artKey[16];
+        LMIC_getSessionKeys(&netid, &devaddr, nwkKey, artKey);
+        Serial.print("netid: ");
+        Serial.println(netid, DEC);
+        Serial.print("devaddr: ");
+        Serial.println(devaddr, HEX);
+        Serial.print("AppSKey: ");
+        for (size_t i = 0; i < sizeof(artKey); ++i) {
+          if (i != 0)
+            Serial.print("-");
+          printHex2(artKey[i]);
+        }
+        Serial.println("");
+        Serial.print("NwkSKey: ");
+        for (size_t i = 0; i < sizeof(nwkKey); ++i) {
+          if (i != 0)
+            Serial.print("-");
+          printHex2(nwkKey[i]);
+        }
+        Serial.println();
+      }
+      // Disable link check validation (automatically enabled
+      // during join, but because slow data rates change max TX
+      // size, we don't use it in this example.
+      LMIC_setLinkCheckMode(0);
+      JoinedOK = true;
+      break;
+    /*
+      || This event is defined but not used in the code. No
+      || point in wasting codespace on it.
+      ||
+      || case EV_RFU1:
+      ||     Serial.println(F("EV_RFU1"));
+      ||     break;
+    */
+    case EV_JOIN_FAILED:
+      Serial.println(F("EV_JOIN_FAILED"));
+      ReadyToSleep = true;
+      break;
+    case EV_REJOIN_FAILED:
+      Serial.println(F("EV_REJOIN_FAILED"));
+      ReadyToSleep = true;
+      break;
+      break;
+    case EV_TXCOMPLETE:
+      Serial.println(F("EV_TXCOMPLETE (includes waiting for RX windows)"));
+      if (LMIC.txrxFlags & TXRX_ACK)
+        Serial.println(F("Received ack"));
+      if (LMIC.dataLen) {
+        Serial.println(F("Received "));
+        Serial.println(LMIC.dataLen);
+        Serial.println(F(" bytes of payload"));
+      }
+      // Schedule next transmission
+      //Loic os_setTimedCallback(&sendjob, os_getTime() + sec2osticks(TX_INTERVAL), do_send);
+      ReadyToSleep = true;
+      break;
+    case EV_LOST_TSYNC:
+      Serial.println(F("EV_LOST_TSYNC"));
+      ReadyToSleep = true;
+      break;
+    case EV_RESET:
+      Serial.println(F("EV_RESET"));
+      ReadyToSleep = true;
+      break;
+    case EV_RXCOMPLETE:
+      // data received in ping slot
+      Serial.println(F("EV_RXCOMPLETE"));
+      ReadyToSleep = true;
+      break;
+    case EV_LINK_DEAD:
+      Serial.println(F("EV_LINK_DEAD"));
+      ReadyToSleep = true;
+      break;
+    case EV_LINK_ALIVE:
+      Serial.println(F("EV_LINK_ALIVE"));
+      ReadyToSleep = true;
+      break;
+    /*
+      || This event is defined but not used in the code. No
+      || point in wasting codespace on it.
+      ||
+      || case EV_SCAN_FOUND:
+      ||    Serial.println(F("EV_SCAN_FOUND"));
+      ||    break;
+    */
+    case EV_TXSTART:
+      Serial.println(F("EV_TXSTART"));
+      break;
+    case EV_TXCANCELED:
+      Serial.println(F("EV_TXCANCELED"));
+      break;
+    case EV_RXSTART:
+      /* do not print anything -- it wrecks timing */
+      break;
+    case EV_JOIN_TXCOMPLETE:
+      Serial.println(F("EV_JOIN_TXCOMPLETE: no JoinAccept"));
+      ReadyToSleep = true;
+      break;
+
+    default:
+      Serial.print(F("Unknown event: "));
+      Serial.println((unsigned) ev);
+      break;
+  }
+}
+
 void setup()
 {
 #ifdef DEBUG
@@ -340,6 +489,7 @@ void setup()
 
   // Initialize pin LED_BUILTIN as an output
   pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, HIGH); // Show we're awake
 
   //Digital Inputs
   pinMode(STAT1, INPUT_PULLUP);
@@ -355,6 +505,7 @@ void setup()
   pinMode(BUZ, OUTPUT);
 
   //Analog inputs
+  analogReadResolution(10);
   pinMode(VLUMPIN, INPUT);
   pinMode(VBATTPIN, INPUT);
   pinMode(SOLPIN, INPUT);
@@ -367,6 +518,9 @@ void setup()
   // Initialize push buttons as inputs
   pinMode(PUSH_BUTTON_UP, INPUT_PULLUP);
   pinMode(PUSH_BUTTON_DOWN, INPUT_PULLUP);
+
+  //Enable interrupts
+  interrupts();
 
   // Start up the DS18B20 library
   sensors_A.begin();
@@ -384,30 +538,50 @@ void setup()
   Door.next(Door_wait);
 
   // Allow wake up pin to trigger interrupt on low.
-  EIFR = 3;      // cancel any existing falling interrupt (interrupt 2)
-  EIFR = 4;      // cancel any existing falling interrupt (interrupt 3)
-  attachInterrupt(digitalPinToInterrupt(PUSH_BUTTON_UP), ButtonUPWake, LOW);
-  attachInterrupt(digitalPinToInterrupt(PUSH_BUTTON_DOWN), ButtonDWNWake, LOW);
+  //EIFR = 3;      // cancel any existing falling interrupt (interrupt 2)
+  //EIFR = 4;      // cancel any existing falling interrupt (interrupt 3)
+  LowPower.attachInterruptWakeup(digitalPinToInterrupt(PUSH_BUTTON_UP), ButtonUPWake, LOW);
+  LowPower.attachInterruptWakeup(digitalPinToInterrupt(PUSH_BUTTON_DOWN), ButtonDWNWake, LOW);
 
-  SetupWDog();
-
-  // Initialize LoRa
-  // Make sure Region #define is correct in TinyLora.h file
-  DEBUG_PRINT("Starting LoRa...");
-  // define multi-channel sending
-  lora.setChannel(MULTI);
-  // set datarate
-  lora.setDatarate(SF7BW125);//fast and low power because we are close to gateway
-  if (!lora.begin())
-  {
-    DEBUG_PRINT("Failed. Check your radio");
-    while (true);
+  //Initialize radio module
+  while (!rf95.init()) {
+    Serial.println("LoRa radio init failed");
+    Serial.println("Uncomment '#define SERIAL_DEBUG' in RH_RF95.cpp for detailed debug info");
+    while (1);
   }
-  DEBUG_PRINT("OK");
+  Serial.println("LoRa radio init OK!");
+
+  // LMIC init
+  os_init();
+  // Reset the MAC state. Session and pending data transfers will be discarded.
+  LMIC_reset();
+  // Disable link-check mode and ADR, because ADR tends to complicate testing.
+  //LMIC_setLinkCheckMode(0);
+  // Set the data rate to Spreading Factor 7.  This is the fastest supported rate for 125 kHz channels, and it
+  // minimizes air time and battery power. Set the transmission power to 14 dBi (25 mW).
+  //LMIC_setDrTxpow(DR_SF7,14);
+  // in the US, with TTN, it saves join time if we start on subband 1 (channels 8-15). This will
+  // get overridden after the join by parameters from the network. If working with other
+  // networks or in other regions, this will need to be changed.
+  //LMIC_selectSubBand(1);
+
+  // Start job (sending automatically starts OTAA too)
+  //send sensors data
+  LoraPublish(&sendjob, 3);
+
+  DEBUG_PRINT("Setup() OK!");
 }
 
 void loop()
 {
+
+  // we call the LMIC's runloop processor. This will cause things to happen based on events and time. One
+  // of the things that will happen is callbacks for transmission complete or received messages. We also
+  // use this loop to queue periodic data transmissions.  You can put other things here in the `loop()` routine,
+  // but beware that LoRaWAN timing is pretty tight, so if you do more than a few milliseconds of work, you
+  // will want to call `os_runloop_once()` every so often, to keep the radio running.
+  os_runloop_once();
+
   //if Button UP interrupt has fired
   if (ButtonUPPressed)
   {
@@ -424,8 +598,7 @@ void loop()
     digitalWrite(LED_BUILTIN, LOW);
 
     // Allow wake up pin to trigger interrupt on low.
-    EIFR = 3;      // cancel any existing falling interrupt (interrupt 2)
-    attachInterrupt(digitalPinToInterrupt(PUSH_BUTTON_UP), ButtonUPWake, LOW);
+    LowPower.attachInterruptWakeup(digitalPinToInterrupt(PUSH_BUTTON_UP), ButtonUPWake, LOW);
   }
 
   //if Button DOWN interrupt has fired.
@@ -444,28 +617,23 @@ void loop()
     digitalWrite(LED_BUILTIN, LOW);
 
     // Allow wake up pin to trigger interrupt on low.
-    EIFR = 4;      // cancel any existing falling interrupt (interrupt 3)
-    attachInterrupt(digitalPinToInterrupt(PUSH_BUTTON_DOWN), ButtonDWNWake, LOW);
+    LowPower.attachInterruptWakeup(digitalPinToInterrupt(PUSH_BUTTON_DOWN), ButtonDWNWake, LOW);
   }
 
   //update Door state engine
   Door.run();
 
-  //if watchdog interrupt has fired
-  if (watchdogActivated)
-  {
-    watchdogActivated = false;
-    // Increase the count of sleep iterations and take a sensor
-    // reading once the max number of iterations has been hit.
-    sleepIterations += 1;
-    if (sleepIterations >= MAX_SLEEP_ITERATIONS)
-    {
-      // Reset the number of sleep iterations.
-      sleepIterations = 0;
 
-      //send sensors data
-      LoraPublish(3);
-    }
+  //Open door at sunrise and close it at sunset, based on an ambient luminosity threshold
+  if ((!DoorDWNStateForced) && (measuredSolarlum > LumThreshold_HIGH)) //Door is closed and luminosity > LumThreshold_HIGH% ->open door
+  {
+    DoorWantedPos = 100.0;
+    DoorUPStateForced = 0;
+  }
+  else if ((!DoorUPStateForced) && (measuredSolarlum < LumThreshold_LOW)) //Door is open and luminosity < LumThreshold_LOW% ->close door
+  {
+    DoorWantedPos = 0.0;
+    DoorDWNStateForced = 0;
   }
 
   //Open door at sunrise and close it at sunset, based on an ambient luminosity threshold
@@ -480,160 +648,211 @@ void loop()
     DoorDWNStateForced = 0;
   }
 
+  if (sleepIterations >= MAX_SLEEP_ITERATIONS)
+  {
+#ifdef DEBUG
+    Serial.begin(115200);
+    while (! Serial);
+    delay(1000);
+    Serial.println("Just woke up!");
+#endif
+    // Reset the number of sleep iterations.
+    sleepIterations = 0;
+
+    //wake radio module and send lora message
+    Serial.println("LoRa radio init OK!");
+
+    //send sensors data over LoRaWan on port 3
+    LoraPublish(&sendjob, 3);
+  }
+
 #ifdef SLEEP
-  // Go to sleep if door is at desired position and nothing else to do
-  if ((int)DoorWantedPos == DoorActualPos)
-    sleep();
+  // Go to sleep if door is at desired position, sensor has successfully joined LoRaWan network and nothing else to do
+  if (((int)DoorWantedPos == DoorActualPos) && JoinedOK && ReadyToSleep)
+  {
+    // Show we're asleep
+    digitalWrite(LED_BUILTIN, LOW); 
+
+    //put radio module to deep sleep
+    rf95.sleep();
+
+    //put controller to deep sleep
+    LowPower.deepSleep(10000);  // Sleep for 10 seconds.
+
+    //We are awake
+#ifdef DEBUG
+    digitalWrite(LED_BUILTIN, HIGH); // Show we're not asleep anymore
+#endif
+    sleepIterations += 1;
+  }
 #endif
 }
 
-void LoraPublish(unsigned char port)
+void LoraPublish(osjob_t* j, unsigned char port)
 {
-  //port 3 is used to send sensors data at regular intervals
-  if (port == 3)
-  {
-    sensors_A.requestTemperatures();
-    float S1 = sensors_A.getTempC(DS18b20_1);
-    float S2 = sensors_A.getTempC(DS18b20_2);
-    float S3 = sensors_A.getTempC(DS18b20_3);
-    float S4 = sensors_A.getTempC(DS18b20_4);
-    float tm = (S1 + S2 + S3 + S4) / 4.0;
+  ReadyToSleep = false;
 
-    //Read luminosity level
-    measuredvlum = analogRead(VLUMPIN);
-    measuredvlum *= 100.0;  // 100%
-    measuredvlum /= 1024; // convert to %
-
-    //Read solar panel luminosity level
-    measuredSolarlum = analogRead(SOLPIN);
-    measuredSolarlum *= 100.0;  // 100%
-    measuredSolarlum /= 1024; // convert to %
-
-    //Read battery level
-    float measuredbatt = analogRead(VBATTPIN);
-    measuredbatt *= 6.6;  // 100% = 3.3*2V because of voltage divider
-    measuredbatt /= 1024; // convert to %
-
-    // encode float as int
-    lumInt = round(measuredvlum * 100);
-    SollumInt = round(measuredSolarlum * 100);
-    battInt = round(measuredbatt * 100);
-    tmInt = round(tm * 100);
-    S1Int = round(S1 * 100);
-    S2Int = round(S2 * 100);
-    S3Int = round(S3 * 100);
-    S4Int = round(S4 * 100);
-
-    //Read the Digital inputs states and record them into a Byte to be sent in the message payload
-    writeBitmap(false, digitalRead(INTERLCK), digitalRead(SwDOWN), digitalRead(SwUP), digitalRead(STAT2), digitalRead(STAT1), ButtonUPPressed, ButtonDWNPressed);
-
-#ifdef DEBUG
-    String msg = F("VBat: ");
-    msg += measuredbatt;
-    msg += F("V\t");
-    msg += F("Lum: ");
-    msg += measuredvlum;
-    msg += F("%\t");
-    msg += F("SoLum: ");
-    msg += measuredSolarlum;
-    msg += F("%\t");
-    msg += F("Avg Temp: ");
-    msg += tm;
-    msg += F("°C\t");
-    msg += F("S1 Temp: ");
-    msg += S1;
-    msg += F("°C\t");
-    msg += F("S2 Temp: ");
-    msg += S2;
-    msg += F("°C\t");
-    msg += F("S3 Temp: ");
-    msg += S3;
-    msg += F("°C\t");
-    msg += F("S4 Temp: ");
-    msg += S4;
-    msg += F("°C\t");
-    msg += F("DigInputs: ");
-    msg += DigInputs;
-
-    DEBUG_PRINT(msg);
-#endif
-
-    // encode int as bytes
-    loraData[0] = highByte(tmInt);
-    loraData[1] = lowByte(tmInt);
-
-    loraData[2] = highByte(S1Int);
-    loraData[3] = lowByte(S1Int);
-
-    loraData[4] = highByte(S2Int);
-    loraData[5] = lowByte(S2Int);
-
-    loraData[6] = highByte(S3Int);
-    loraData[7] = lowByte(S3Int);
-
-    loraData[8] = highByte(S4Int);
-    loraData[9] = lowByte(S4Int);
-
-    loraData[10] = highByte(lumInt);
-    loraData[11] = lowByte(lumInt);
-
-    loraData[12] = highByte(SollumInt);
-    loraData[13] = lowByte(SollumInt);
-
-    loraData[14] = highByte(battInt);
-    loraData[15] = lowByte(battInt);
-
-    loraData[16] = highByte(0);
-    loraData[17] = lowByte(DigInputs);
+  // Check if there is not a current TX/RX job running
+  if (LMIC.opmode & OP_TXRXPEND) {
+    Serial.println(F("OP_TXRXPEND, not sending"));
   }
-  else if (port == 4) //port 4 is used to send door opening/closing progress at short intervals only when door is moving
+  else
   {
-    //Read the Digital inputs states and record them into a Byte to be sent in the message payload
-    writeBitmap(false, digitalRead(INTERLCK), digitalRead(SwDOWN), digitalRead(SwUP), digitalRead(STAT2), digitalRead(STAT1), ButtonUPPressed, ButtonDWNPressed);
+    //port 3 is used to send sensors data at regular intervals
+    if (port == 3)
+    {
+      sensors_A.requestTemperatures();
+      float S1 = sensors_A.getTempC(DS18b20_1);
+      float S2 = sensors_A.getTempC(DS18b20_2);
+      float S3 = sensors_A.getTempC(DS18b20_3);
+      float S4 = sensors_A.getTempC(DS18b20_4);
+      float tm = (S1 + S2 + S3 + S4) / 4.0;
+
+      // scale to -1 to 1 range
+      S1 /= 100.0;
+      S2 /= 100.0;
+      S3 /= 100.0;
+      S4 /= 100.0;
+      tm /= 100.0;
+
+      // float -> int
+      // note: this uses the sflt16 datum (https://github.com/mcci-catena/arduino-lmic#sflt16)
+      uint16_t payloadS1 = LMIC_f2sflt16(S1);
+      uint16_t payloadS2 = LMIC_f2sflt16(S2);
+      uint16_t payloadS3 = LMIC_f2sflt16(S3);
+      uint16_t payloadS4 = LMIC_f2sflt16(S4);
+      uint16_t payloadtm = LMIC_f2sflt16(tm);
+
+      //Read luminosity level
+      measuredvlum = analogRead(VLUMPIN);
+      measuredvlum /= 1024; // convert to 0-1 range
+      // float -> int
+      // note: this uses the sflt16 datum (https://github.com/mcci-catena/arduino-lmic#sflt16)
+      uint16_t payloadlum = LMIC_f2sflt16(measuredvlum);
+
+      //Read solar panel luminosity level
+      measuredSolarlum = analogRead(SOLPIN);
+      measuredSolarlum /= 1024; // convert to 0-1 range
+      // float -> int
+      // note: this uses the sflt16 datum (https://github.com/mcci-catena/arduino-lmic#sflt16)
+      uint16_t payloadsolarlum = LMIC_f2sflt16(measuredSolarlum);
+
+      //Read battery level
+      float measuredbatt = analogRead(VBATTPIN);
+      measuredbatt *= 6.6;  // 100% = 3.3*2V because of voltage divider
+      measuredbatt /= 1024; // convert to %
+      measuredbatt /= 100.0; // scale to 0-1 range
+      // float -> int
+      // note: this uses the sflt16 datum (https://github.com/mcci-catena/arduino-lmic#sflt16)
+      uint16_t payloadbatt = LMIC_f2sflt16(measuredbatt);
+
+      //Read the Digital inputs states and record them into a Byte to be sent in the message payload
+      writeBitmap(false, digitalRead(INTERLCK), digitalRead(SwDOWN), digitalRead(SwUP), digitalRead(STAT2), digitalRead(STAT1), ButtonUPPressed, ButtonDWNPressed);
 
 #ifdef DEBUG
-    String msg = F("Door wanted pos: ");
-    msg += DoorWantedPos;
-    msg += F("%");
-    msg += F(" - Door actual pos: ");
-    msg += DoorActualPos;
-    msg += F("%\t");
-    msg += F("DigInputs: ");
-    msg += DigInputs;
+      String msg = F("VBat: ");
+      msg += measuredbatt;
+      msg += F("V\t");
+      msg += F("Lum: ");
+      msg += measuredvlum;
+      msg += F("%\t");
+      msg += F("SoLum: ");
+      msg += measuredSolarlum;
+      msg += F("%\t");
+      msg += F("Avg Temp: ");
+      msg += tm;
+      msg += F("°C\t");
+      msg += F("S1 Temp: ");
+      msg += S1;
+      msg += F("°C\t");
+      msg += F("S2 Temp: ");
+      msg += S2;
+      msg += F("°C\t");
+      msg += F("S3 Temp: ");
+      msg += S3;
+      msg += F("°C\t");
+      msg += F("S4 Temp: ");
+      msg += S4;
+      msg += F("°C\t");
+      msg += F("DigInputs: ");
+      msg += DigInputs;
 
-    DEBUG_PRINT(msg);
+      DEBUG_PRINT(msg);
 #endif
 
-    //convert float to int
-    int iDoorWantedPos = round(DoorWantedPos);
+      // encode int as bytes
+      loraData[0] = lowByte(payloadtm);
+      loraData[1] = highByte(payloadtm);
 
-    // encode int as bytes
-    loraData[0] = highByte(iDoorWantedPos);
-    loraData[1] = lowByte(iDoorWantedPos);
+      loraData[2] = lowByte(payloadS1);
+      loraData[3] = highByte(payloadS1);
 
-    loraData[2] = highByte(DoorActualPos);
-    loraData[3] = lowByte(DoorActualPos);
+      loraData[4] = lowByte(payloadS2);
+      loraData[5] = highByte(payloadS2);
 
-    loraData[4] = highByte(0);
-    loraData[5] = lowByte(DigInputs);
+      loraData[6] = lowByte(payloadS3);
+      loraData[7] = highByte(payloadS3);
+
+      loraData[8] = lowByte(payloadS4);
+      loraData[9] = highByte(payloadS4);
+
+      loraData[10] = lowByte(payloadlum);
+      loraData[11] = highByte(payloadlum);
+
+      loraData[12] = lowByte(payloadsolarlum);
+      loraData[13] = highByte(payloadsolarlum);
+
+      loraData[14] = lowByte(payloadbatt);
+      loraData[15] = highByte(payloadbatt);
+
+      loraData[16] = highByte(0);
+      loraData[17] = lowByte(DigInputs);
+    }
+    else if (port == 4) //port 4 is used to send door opening/closing progress at short intervals only when door is moving
+    {
+      //Read the Digital inputs states and record them into a Byte to be sent in the message payload
+      writeBitmap(false, digitalRead(INTERLCK), digitalRead(SwDOWN), digitalRead(SwUP), digitalRead(STAT2), digitalRead(STAT1), ButtonUPPressed, ButtonDWNPressed);
+
+#ifdef DEBUG
+      String msg = F("Door wanted pos: ");
+      msg += DoorWantedPos;
+      msg += F("%");
+      msg += F(" - Door actual pos: ");
+      msg += DoorActualPos;
+      msg += F("%\t");
+      msg += F("DigInputs: ");
+      msg += DigInputs;
+
+      DEBUG_PRINT(msg);
+#endif
+
+      //convert float to int
+      int iDoorWantedPos = round(DoorWantedPos);
+
+      // encode int as bytes
+      loraData[0] = highByte(iDoorWantedPos);
+      loraData[1] = lowByte(iDoorWantedPos);
+
+      loraData[2] = highByte(DoorActualPos);
+      loraData[3] = lowByte(DoorActualPos);
+
+      loraData[4] = highByte(0);
+      loraData[5] = lowByte(DigInputs);
+    }
+
+    DEBUG_PRINT("Sending LoRa Data...");
+
+    // prepare upstream data transmission at the next possible time.
+    // transmit on "port" (the first parameter); you can use any value from 1 to 223 (others are reserved).
+    // don't request an ack (the last parameter, if not zero, requests an ack from the network).
+    // Remember, acks consume a lot of network resources; don't ask for an ack unless you really need it.
+    LMIC_setTxData2(port, loraData, sizeof(loraData) - 1, 0);
+
+    // blink LED to indicate packet sent
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(100);
+    digitalWrite(LED_BUILTIN, LOW);
   }
-
-  DEBUG_PRINT("Sending LoRa Data...");
-
-  lora.sendData(loraData, sizeof(loraData), port, lora.frameCounter);
-
-#ifdef DEBUG
-  String msg = F("Frame Counter: ");
-  msg += lora.frameCounter;
-  DEBUG_PRINT(msg);
-#endif
-
-  lora.frameCounter++;
-
-  // blink LED to indicate packet sent
-  digitalWrite(LED_BUILTIN, HIGH);
-  delay(100);
-  digitalWrite(LED_BUILTIN, LOW);
 }
 
 //open or close Door
@@ -728,7 +947,7 @@ void Door_moveOpen()
   {
     DoorActualPos += 10;
 #ifdef DOOR_PROGRESS
-    LoraPublish(4);
+    LoraPublish(&sendjob, 4);
 #endif
 #ifdef DOOR_BUZZ
     tone(BUZ, Frequ, Duration);
@@ -758,7 +977,7 @@ void Door_moveClose()
   {
     DoorActualPos -= 10;
 #ifdef DOOR_PROGRESS
-    LoraPublish(4);
+    LoraPublish(&sendjob, 4);
 #endif
 #ifdef DOOR_BUZZ
     tone(BUZ, Frequ, Duration);
