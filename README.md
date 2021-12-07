@@ -12,7 +12,7 @@
 <li>When door is moving, a buzzer makes intermitent beeps in order to let the chiken know it is bedtime</li>
 <li>Measures the individual temperature of 4 separate nesting boxes (aim is to detect when a new egg was layed) + computes an average</li>
 <li>Runs on a 3.7V 4400mAh Lithium Ion Battery Pack and a 6V, 1W solar panel</li>
-<li>Goes to DeepSleep until UP/DOWN buttons are pressed </li>
+<li>Goes to deep sleep until UP/DOWN buttons are pressed. 80µA Current consumption in deep sleep mode. </li>
 <li>broadcasts over LoraWan every three minutes the systems’ metrics (temperatures, ambient light level, door position, battery level and charging status), received by home automation system in JSON format via MQTT broker</li><br /><br />
 
 In order to broadcast data to the TTN network, you need to register an account as well as the Feather board. <a title="https://learn.adafruit.com/the-things-network-for-feather?view=all" href="https://learn.adafruit.com/the-things-network-for-feather?view=all">Detailed instructions here</a>.<br /><br />
