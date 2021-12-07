@@ -5,6 +5,7 @@
 
 <h4>Key features</h4>
 <li>Runs on an Adafruit Feather M0 board (ATSAMD21G18 ARM Cortex M0 processor, clocked at 48 MHz and at 3.3V logic) equiped with a LoRa Radio Module</li>
+<li>LoraWan connectivity to TTN network based on LMIC fully compliant library</li>
 <li>Entrance guillotine-style door is motorized. Two reed end-switches detect the door open/close positions</li>
 <li>UP/DOWN interface buttons to manually force door opening/closing</li>
 <li>Door automatically opens/closes at sunrise and sunset (as a function of an ambient light threshold, measured via the solar panel voltage output)</li>
