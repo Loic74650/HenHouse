@@ -198,7 +198,7 @@ volatile int sleepIterations = 0;
 #define ONE_WIRE_BUS_A A4
 
 //Motorized door state machine
-static YASM Door;
+YASM Door;
 
 //Door position
 volatile double DoorWantedPos = 100.0;
@@ -210,7 +210,7 @@ volatile int DoorActualPos = 0;
 #define InContact    0  //endswitches state when in limit position
 
 //Time required for the door to open + 20% or so. Serves as timeout in case endswitches don't work
-const unsigned long DoorTimeConstant = 60000L; //60 sec
+const unsigned long DoorTimeConstant = 100000L; //100 sec
 unsigned long DoorCycleStart = 0L;
 unsigned long DoorCycleEnd = 0L;
 
@@ -296,16 +296,13 @@ const lmic_pinmap lmic_pins = {
 RH_RF95 rf95(RFM95_CS, RFM95_INT);
 
 //ready to go to sleep?
-static bool DoorAtPosition = false;
+volatile bool DoorAtPosition = false;
 volatile bool ReadyToSleep = false;
 volatile bool JoinedOK = false;
 
 //Interrupt handle if UP push button was pressed
 void ButtonUPWake()
 {
-#ifdef SLEEP
-  DoorAtPosition = false;
-#endif
   detachInterrupt (digitalPinToInterrupt (PUSH_BUTTON_UP));      // stop LOW interrupt
   ButtonUPPressed = 1;
   ButtonDWNPressed = 0;
@@ -316,9 +313,6 @@ void ButtonUPWake()
 //Interrupt handle if DOWN push button was pressed
 void ButtonDWNWake()
 {
-#ifdef SLEEP
-  DoorAtPosition = false;
-#endif
   detachInterrupt (digitalPinToInterrupt (PUSH_BUTTON_DOWN));      // stop LOW interrupt
   ButtonDWNPressed = 1;
   ButtonUPPressed = 0;
@@ -498,6 +492,9 @@ void setup()
   pinMode(SwDOWN, INPUT_PULLUP);
   pinMode(INTERLCK, INPUT_PULLUP);
 
+ // if ((digitalRead(SwUP) != InContact) && (digitalRead(SwDOWN) != InContact))
+  //  DoorActualPos = 50.0;
+
   //Digital outputs
   pinMode(AIN1, OUTPUT);
   pinMode(AIN2, OUTPUT);
@@ -515,9 +512,15 @@ void setup()
   digitalWrite(AIN2, LOW);
   digitalWrite(BUZ, LOW);
 
+  stopDoor();
+
   // Initialize push buttons as inputs
   pinMode(PUSH_BUTTON_UP, INPUT_PULLUP);
   pinMode(PUSH_BUTTON_DOWN, INPUT_PULLUP);
+
+  if (digitalRead(SwUP) == InContact) DoorActualPos = 100.0;
+  if (digitalRead(SwDOWN) == InContact) DoorActualPos = 0.0;
+  if ((digitalRead(SwDOWN) != InContact) && (digitalRead(SwUP) != InContact)) DoorActualPos = 50.0;
 
   //Enable interrupts
   interrupts();
@@ -592,7 +595,7 @@ void loop()
     ButtonUPPressed = 0;
     ButtonDWNPressed = 0;
 
-    // blink LED to indicate packet sent
+    // blink LED 
     digitalWrite(LED_BUILTIN, HIGH);
     delay(100);
     digitalWrite(LED_BUILTIN, LOW);
@@ -611,7 +614,7 @@ void loop()
     ButtonDWNPressed = 0;
     ButtonUPPressed = 0;
 
-    // blink LED to indicate packet sent
+    // blink LED 
     digitalWrite(LED_BUILTIN, HIGH);
     delay(100);
     digitalWrite(LED_BUILTIN, LOW);
@@ -622,7 +625,6 @@ void loop()
 
   //update Door state engine
   Door.run();
-
 
   //Open door at sunrise and close it at sunset, based on an ambient luminosity threshold
   if ((!DoorDWNStateForced) && (measuredSolarlum > LumThreshold_HIGH)) //Door is closed and luminosity > LumThreshold_HIGH% ->open door
@@ -671,7 +673,7 @@ void loop()
   if (((int)DoorWantedPos == DoorActualPos) && JoinedOK && ReadyToSleep)
   {
     // Show we're asleep
-    digitalWrite(LED_BUILTIN, LOW); 
+    digitalWrite(LED_BUILTIN, LOW);
 
     //put radio module to deep sleep
     rf95.sleep();
@@ -680,12 +682,14 @@ void loop()
     LowPower.deepSleep(10000);  // Sleep for 10 seconds.
 
     //We are awake
-#ifdef DEBUG
+//#ifdef DEBUG
     digitalWrite(LED_BUILTIN, HIGH); // Show we're not asleep anymore
-#endif
+//#endif
     sleepIterations += 1;
+
   }
 #endif
+ // Door.next(Door_wait);
 }
 
 void LoraPublish(osjob_t* j, unsigned char port)
@@ -733,9 +737,11 @@ void LoraPublish(osjob_t* j, unsigned char port)
       //Read solar panel luminosity level
       measuredSolarlum = analogRead(SOLPIN);
       measuredSolarlum /= 1024; // convert to 0-1 range
+      float SolLum = measuredSolarlum;
+      measuredSolarlum *= 100.0; // convert to % -> required to check for open/close motorized door in loop()
       // float -> int
       // note: this uses the sflt16 datum (https://github.com/mcci-catena/arduino-lmic#sflt16)
-      uint16_t payloadsolarlum = LMIC_f2sflt16(measuredSolarlum);
+      uint16_t payloadsolarlum = LMIC_f2sflt16(SolLum);
 
       //Read battery level
       float measuredbatt = analogRead(VBATTPIN);
@@ -757,7 +763,7 @@ void LoraPublish(osjob_t* j, unsigned char port)
       msg += measuredvlum;
       msg += F("%\t");
       msg += F("SoLum: ");
-      msg += measuredSolarlum;
+      msg += SolLum;
       msg += F("%\t");
       msg += F("Avg Temp: ");
       msg += tm;
