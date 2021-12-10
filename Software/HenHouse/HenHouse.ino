@@ -638,18 +638,6 @@ void loop()
     DoorDWNStateForced = 0;
   }
 
-  //Open door at sunrise and close it at sunset, based on an ambient luminosity threshold
-  if ((!DoorDWNStateForced) && (measuredSolarlum > LumThreshold_HIGH)) //Door is closed and luminosity > LumThreshold_HIGH% ->open door
-  {
-    DoorWantedPos = 100.0;
-    DoorUPStateForced = 0;
-  }
-  else if ((!DoorUPStateForced) && (measuredSolarlum < LumThreshold_LOW)) //Door is open and luminosity < LumThreshold_LOW% ->close door
-  {
-    DoorWantedPos = 0.0;
-    DoorDWNStateForced = 0;
-  }
-
   if (sleepIterations >= MAX_SLEEP_ITERATIONS)
   {
 #ifdef DEBUG
